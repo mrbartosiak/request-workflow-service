@@ -54,7 +54,8 @@ public final class SyntheticRequestActionController {
         });
     }
 
-    @PostMapping(path = "/requests/{ref}/actions/{action:verify|accept}", produces = MediaType.APPLICATION_JSON_VALUE)
+    @PostMapping(path = "/requests/{ref}/actions/{action:verify|accept|delete|reject}",
+            produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> transition(HttpServletRequest request, @PathVariable("ref") String ref,
                                         @PathVariable("action") String action) {
         return authenticated(request, actor -> {

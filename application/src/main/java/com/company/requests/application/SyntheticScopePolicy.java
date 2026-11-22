@@ -1,6 +1,7 @@
 package com.company.requests.application;
 
 import com.company.requests.application.EffectiveScopeUpdates.Permission;
+import com.company.requests.application.EffectiveScopeStore.Field;
 import com.company.requests.application.EffectiveScopeStore.Visibility;
 import com.company.requests.domain.Action;
 import com.company.requests.domain.OrganizationId;
@@ -13,6 +14,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Map;
@@ -103,6 +105,12 @@ public final class SyntheticScopePolicy {
     }
 
     Optional<EffectiveScopeChange.SetVisibility> visibilityChange(Action action, Request request, Visibility current) {
+        if (action == Action.DELETE) {
+            var fields = EnumSet.of(Field.REF, Field.ACTION, Field.RESULT_REVISION, Field.STATE);
+            fields.retainAll(current.fields());
+            var next = new Visibility(Math.incrementExact(current.version()), current.assigneeOnly(), fields);
+            return Optional.of(new EffectiveScopeChange.SetVisibility(request.ref(), current, next));
+        }
         if (action != Action.ACCEPT || !assigneeOnlyOnAccept.contains(request.type()) || current.assigneeOnly()) {
             return Optional.empty();
         }

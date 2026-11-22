@@ -17,6 +17,7 @@ import com.company.requests.domain.RequestRef;
 import com.company.requests.domain.RequestState;
 import com.company.requests.domain.RequestType;
 import com.company.requests.domain.TransitionFact;
+import com.company.requests.domain.TransitionReason;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -115,6 +116,16 @@ public final class JdbcWorkflowRecords implements RequestStore, ExistingRequestS
                 """, organization.value(), fact.ref().value(), fact.sequence(), fact.revision(), fact.action().name(),
                 fact.from() == null ? null : fact.from().name(), fact.to().name(), recordedAt.getEpochSecond(),
                 recordedAt.getNano(), fact.occurrence().actorRef());
+    }
+
+    @Override
+    public void appendReason(PolicyGuard guard, TransitionFact fact, TransitionReason reason) {
+        JdbcTransactionRunner.requireExclusiveGuard(dataSource, guard);
+        jdbc.update("""
+                INSERT INTO requests.transition_reason (organization, ref, sequence, terminal_state, reason)
+                VALUES (?, ?, ?, ?, ?)
+                """, guard.organization().value(), fact.ref().value(), fact.sequence(), fact.to().name(),
+                reason.value());
     }
 
     @Override

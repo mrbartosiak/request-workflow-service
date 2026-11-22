@@ -36,13 +36,19 @@ final class ReceiptReplay {
 
     sealed interface Result permits Rejection, Released { }
 
-    enum Rejection implements Result { CONCEALED, CONFLICT, EXPIRED, FENCED, OUTCOME_UNKNOWN }
+    enum Rejection implements Result { CONCEALED, CONFLICT, EXPIRED, FENCED, ILLEGAL_STATE, OUTCOME_UNKNOWN }
 
     record Released(byte[] envelope) implements Result { }
 
     Result resolve(AuthenticatedActor actor, VerifiedKey key, IntentDigest.Intent intent,
                    Function<PolicyGuard, Admission> authorize, Function<OperationReceipt, byte[]> encode,
                    ReleaseBuffer buffer, long started) {
+        return resolve(actor, key, intent, authorize, encode, buffer, started, Rejection.OUTCOME_UNKNOWN);
+    }
+
+    Result resolve(AuthenticatedActor actor, VerifiedKey key, IntentDigest.Intent intent,
+                   Function<PolicyGuard, Admission> authorize, Function<OperationReceipt, byte[]> encode,
+                   ReleaseBuffer buffer, long started, Rejection missingActiveReceipt) {
         boolean past = key.eligibility() == Eligibility.PAST_GENERATION_LOOKUP_ONLY;
         var foundTrusted = new boolean[1];
         var outcome = release.handoff(actor.organization(), authorize, () -> {
@@ -67,7 +73,7 @@ final class ReceiptReplay {
             }
             case FRESHNESS_LOST -> Rejection.EXPIRED;
             case WITHHELD -> past ? Rejection.FENCED
-                    : foundTrusted[0] ? Rejection.CONCEALED : Rejection.OUTCOME_UNKNOWN;
+                    : foundTrusted[0] ? Rejection.CONCEALED : missingActiveReceipt;
             case BUFFER_UNAVAILABLE, BUDGET_EXCEEDED -> Rejection.OUTCOME_UNKNOWN;
         };
     }

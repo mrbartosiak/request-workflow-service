@@ -11,12 +11,13 @@ import com.company.requests.domain.Request;
 import com.company.requests.domain.RequestBody;
 import com.company.requests.domain.RequestRef;
 import com.company.requests.domain.TransitionFact;
+import com.company.requests.domain.TransitionReason;
 import java.util.Optional;
 import java.util.function.Function;
 
 import static com.company.requests.application.ReceiptReplay.requireBudget;
 
-/** Atomic Edit, Verify and Accept under the certified writer and current scoped grants. */
+/** Atomic existing-request commands under the certified writer and current scoped grants. */
 public final class RequestActionCommand {
     private final TransactionRunner transactions;
     private final CurrentAccess access;
@@ -71,8 +72,8 @@ public final class RequestActionCommand {
 
     public Result transition(AuthenticatedActor actor, String key, IntentDigest.Transition intent,
                              Function<OperationReceipt, byte[]> encode) {
-        if (intent.action() != Action.VERIFY && intent.action() != Action.ACCEPT) {
-            throw new IllegalArgumentException("This command accepts Verify and Accept transitions.");
+        if (intent.action() == Action.PUBLISH) {
+            throw new IllegalArgumentException("Publish requires the publication command.");
         }
         return execute(actor, key, new Submission(intent.action(), intent.ref(), intent.observation(), intent), encode);
     }
@@ -82,14 +83,15 @@ public final class RequestActionCommand {
         long started = System.nanoTime();
         try {
             var authorized = transactions.run(() -> {
-                var admission = access.requireSubmittedAction(actor, submitted.ref(), submitted.action());
+                var target = access.requireSubmittedAction(actor, submitted.ref(), submitted.action());
                 requireBudget(started);
-                return new AuthorizedKey(admission, keys.verify(signedKey, actor, admission));
+                return new AuthorizedKey(target.admission(), keys.verify(signedKey, actor, target.admission()),
+                        target.lookupOnly());
             });
             var key = authorized.key();
             Function<PolicyGuard, Admission> authorize = guard ->
-                    access.requireSubmittedAction(actor, guard, submitted.ref(), submitted.action());
-            if (key.eligibility() == Eligibility.ACTIVE_CAN_EXECUTE) {
+                    access.requireSubmittedAction(actor, guard, submitted.ref(), submitted.action()).admission();
+            if (key.eligibility() == Eligibility.ACTIVE_CAN_EXECUTE && !authorized.lookupOnly()) {
                 try {
                     transactions.run(() -> {
                         arbitrate(actor, submitted, authorized, started);
@@ -103,7 +105,8 @@ public final class RequestActionCommand {
             }
 
             return switch (replay.resolve(actor, key, submitted.intent(), authorize, encode,
-                    new ReleaseBuffer(ReleaseBuffer.MAX_BYTES), started)) {
+                    new ReleaseBuffer(ReleaseBuffer.MAX_BYTES), started, authorized.lookupOnly()
+                            ? ReceiptReplay.Rejection.ILLEGAL_STATE : ReceiptReplay.Rejection.OUTCOME_UNKNOWN)) {
                 case ReceiptReplay.Released released -> new Released(released.envelope());
                 case ReceiptReplay.Rejection rejection -> Rejection.valueOf(rejection.name());
             };
@@ -166,9 +169,12 @@ public final class RequestActionCommand {
             effects.advance(guard, before, after);
             effects.replaceBody(guard, before.ref(), effect.body());
         } else {
+            var intent = (IntentDigest.Transition) submitted.intent();
             Lifecycle.TransitionCommand transition = switch (submitted.action()) {
                 case VERIFY -> new Lifecycle.Verify();
                 case ACCEPT -> new Lifecycle.Accept();
+                case DELETE -> new Lifecycle.Delete(new TransitionReason(intent.reason().orElseThrow()));
+                case REJECT -> new Lifecycle.Reject(new TransitionReason(intent.reason().orElseThrow()));
                 default -> throw new IllegalStateException("Unexpected request action.");
             };
             var effect = Lifecycle.transition(before, transition,
@@ -176,6 +182,7 @@ public final class RequestActionCommand {
             after = effect.request();
             effects.advance(guard, before, after);
             requests.appendFact(guard.organization(), effect.transition());
+            effect.reason().ifPresent(reason -> effects.appendReason(guard, effect.transition(), reason));
         }
         claims.finalizeReceipt(new OperationReceipt(key.receiptKey(), digest, key.generation(), key.expiresAt(),
                 submitted.action(), after.ref(), after.revision(), after.state(), Optional.empty(), 200));
@@ -207,7 +214,7 @@ public final class RequestActionCommand {
         requireBudget(started);
     }
 
-    private record AuthorizedKey(Admission admission, VerifiedKey key) { }
+    private record AuthorizedKey(Admission admission, VerifiedKey key, boolean lookupOnly) { }
 
     private record Submission(Action action, RequestRef ref, String observation, IntentDigest.Intent intent) { }
 

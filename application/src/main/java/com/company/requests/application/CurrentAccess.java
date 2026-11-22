@@ -25,6 +25,7 @@ import java.util.function.Function;
 public final class CurrentAccess {
     private static final Set<Field> RESULT_FIELDS = Set.of(
             Field.REF, Field.ACTION, Field.RESULT_REVISION, Field.STATE);
+    private static final Set<Field> DELETED_METADATA_FIELDS = Set.of(Field.REF, Field.STATE);
 
     private final ScopeAuthority authority;
     private final WriterEpoch writer;
@@ -121,8 +122,8 @@ public final class CurrentAccess {
         var policy = policy(actor);
         requireProof(policy, guard);
         policy.grant(actor);
-        return effective.requests().find(actor.organization(), ref)
-                .map(target -> fields(actor, guard, target)).orElseGet(Set::of);
+        return scopedTarget(actor, guard, ref).map(target -> target.state() == RequestState.DELETED
+                ? deletedMetadata(actor, guard, target) : fields(actor, guard, target)).orElseGet(Set::of);
     }
 
     Admission requireActionScope(AuthenticatedActor actor, PolicyGuard guard) {
@@ -141,16 +142,26 @@ public final class CurrentAccess {
         return requireProof(policy, guard);
     }
 
-    Admission requireSubmittedAction(AuthenticatedActor actor, RequestRef ref, Action action) {
+    SubmittedAction requireSubmittedAction(AuthenticatedActor actor, RequestRef ref, Action action) {
         var guard = shared(actor);
         return requireSubmittedAction(actor, guard, ref, action);
     }
 
-    Admission requireSubmittedAction(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref, Action action) {
+    SubmittedAction requireSubmittedAction(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref, Action action) {
         var admission = requireActionScope(actor, guard);
-        actionTarget(actor, guard, ref, action).orElseThrow(TargetConcealed::new);
-        return admission;
+        var target = scopedTarget(actor, guard, ref).orElseThrow(TargetConcealed::new);
+        if (target.state() == RequestState.DELETED) {
+            // The tombstone has a separate receipt surface. It cannot admit an action context or a new write.
+            if (action != Action.DELETE || !permitsDeleteResult(actor, guard, target)) {
+                throw new TargetConcealed();
+            }
+            return new SubmittedAction(admission, true);
+        }
+        actionTarget(actor, guard, target, action).orElseThrow(TargetConcealed::new);
+        return new SubmittedAction(admission, false);
     }
+
+    record SubmittedAction(Admission admission, boolean lookupOnly) { }
 
     static final class TargetConcealed extends RuntimeException { }
 
@@ -164,10 +175,16 @@ public final class CurrentAccess {
                         .filter(target -> permitted(policy(actor), guard, actor, Grant.CREATE, target.type()))
                         .filter(target -> permitsCreateResult(actor, guard, target)).isPresent();
             }
+            if (receipt.action() == Action.DELETE) {
+                return scopedTarget(actor, guard, receipt.resultRef())
+                        .filter(target -> target.state() == RequestState.DELETED)
+                        .filter(target -> permitsDeleteResult(actor, guard, target)).isPresent();
+            }
             var resultGrant = switch (receipt.action()) {
                 case EDIT -> Grant.RESULT_READ_EDIT;
                 case VERIFY -> Grant.RESULT_READ_VERIFY;
                 case ACCEPT -> Grant.RESULT_READ_ACCEPT;
+                case REJECT -> Grant.RESULT_READ_REJECT;
                 default -> null;
             };
             return resultGrant != null && actionTarget(actor, guard, receipt.resultRef(), receipt.action())
@@ -181,14 +198,17 @@ public final class CurrentAccess {
 
     /** The caller has proved the current scope on the guard before asking about a target. */
     Optional<ActionTarget> actionTarget(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref, Action action) {
+        return scopedTarget(actor, guard, ref).filter(target -> target.state() != RequestState.DELETED)
+                .flatMap(target -> actionTarget(actor, guard, target, action));
+    }
+
+    private Optional<Request> scopedTarget(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref) {
+        return effective.requests().find(guard.organization(), ref)
+                .filter(target -> target.organization().equals(actor.organization()) && target.ref().equals(ref));
+    }
+
+    private Optional<ActionTarget> actionTarget(AuthenticatedActor actor, PolicyGuard guard, Request target, Action action) {
         var policy = policy(actor);
-        var found = effective.requests().find(guard.organization(), ref)
-                .filter(target -> target.organization().equals(actor.organization()) && target.ref().equals(ref))
-                .filter(target -> target.state() != RequestState.DELETED);
-        if (found.isEmpty()) {
-            return Optional.empty();
-        }
-        var target = found.orElseThrow();
         try {
             if (!permitted(policy, guard, actor, Grant.ROW_READ, target.type())) {
                 return Optional.empty();
@@ -221,6 +241,40 @@ public final class CurrentAccess {
     }
 
     record ActionTarget(Request request, Assignment assignment, Visibility visibility, Field materialField) { }
+
+    private Set<Field> deletedMetadata(AuthenticatedActor actor, PolicyGuard guard, Request target) {
+        return deletedScope(actor, guard, target).map(scope -> {
+            var fields = EnumSet.copyOf(DELETED_METADATA_FIELDS);
+            fields.retainAll(scope.visibility().fields());
+            return Set.copyOf(fields);
+        }).orElseGet(Set::of);
+    }
+
+    private boolean permitsDeleteResult(AuthenticatedActor actor, PolicyGuard guard, Request target) {
+        var policy = policy(actor);
+        // Replaying the minimum receipt fields never restores access to the original material fact.
+        return deletedScope(actor, guard, target)
+                .filter(scope -> scope.visibility().fields().containsAll(RESULT_FIELDS))
+                .filter(scope -> permitted(policy, guard, actor, Grant.CONTEXT_DELETE, target.type()))
+                .filter(scope -> permitted(policy, guard, actor, Grant.EXECUTE_DELETE, target.type()))
+                .filter(scope -> permitted(policy, guard, actor, Grant.RESULT_READ_DELETE, target.type())).isPresent();
+    }
+
+    private Optional<RowScope> deletedScope(AuthenticatedActor actor, PolicyGuard guard, Request target) {
+        var policy = policy(actor);
+        try {
+            if (permitted(policy, guard, actor, Grant.DELETED_METADATA, target.type())
+                    && permitted(policy, guard, actor, Grant.ROW_READ, target.type())) {
+                var scope = rowScope(actor, guard, target);
+                if (scope.visible()) {
+                    return Optional.of(scope);
+                }
+            }
+        } catch (AccessDeniedException unregistered) {
+            return Optional.empty();
+        }
+        return Optional.empty();
+    }
 
     private Set<Field> fields(AuthenticatedActor actor, PolicyGuard guard, Request target) {
         if (!guard.organization().equals(actor.organization()) || !target.organization().equals(actor.organization())

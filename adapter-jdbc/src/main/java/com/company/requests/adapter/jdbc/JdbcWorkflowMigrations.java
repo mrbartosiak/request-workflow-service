@@ -15,7 +15,7 @@ public final class JdbcWorkflowMigrations {
             "db/workflow/V004__scope_authority_witness.sql",
             "db/workflow/V005__scope_authority_projection.sql",
             "db/workflow/V006__effective_scope_access.sql", "db/workflow/V007__action_context_grants.sql",
-            "db/workflow/V008__request_action_result_grants.sql");
+            "db/workflow/V008__request_action_result_grants.sql", "db/workflow/V009__terminal_request_actions.sql");
 
     private final JdbcTransactionRunner runner;
     private final JdbcTemplate jdbc;
@@ -52,6 +52,11 @@ public final class JdbcWorkflowMigrations {
     /** Adds the distinct result grants for Edit, Verify and Accept. */
     public void migrateRequestActions() {
         migrateThrough(8);
+    }
+
+    /** Adds protected terminal reasons and separate current deleted metadata and result grants. */
+    public void migrateTerminalRequestActions() {
+        migrateThrough(9);
     }
 
     void migrateThrough(int targetVersion) {
