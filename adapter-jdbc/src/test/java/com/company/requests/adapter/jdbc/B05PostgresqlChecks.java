@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import javax.sql.DataSource;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.AbstractDataSource;
 import org.springframework.jdbc.datasource.ConnectionHolder;
@@ -63,6 +64,7 @@ public final class B05PostgresqlChecks {
         var check = new B05PostgresqlChecks(migration, command, observer);
         check.migrate(new JdbcWorkflowMigrations(migration), prior);
         check.verifyOwnership(migration, observer);
+        check.verifySecondaryConnection(command);
         check.verifyEffects(prior);
         check.verifyIntegrity();
     }
@@ -155,6 +157,51 @@ public final class B05PostgresqlChecks {
             }
         }
         System.out.println("PASS distinct migration/command/observer rights, no ambient or nested command transaction");
+    }
+
+    private void verifySecondaryConnection(DataSource commandSource) {
+        var secondaryDataSource = new TrackingDataSource(commandSource);
+        var secondary = new JdbcTemplate(secondaryDataSource);
+        var secondaryRecords = new JdbcWorkflowRecords(secondaryDataSource);
+        var secondaryReceipts = new JdbcReceiptStore(secondaryDataSource);
+        var ownerOrg = new OrganizationId("ownership-rollback");
+        var secondaryOrg = new OrganizationId("ownership-secondary");
+        boolean[] rejected = {false};
+        Fault injected = new Fault();
+        try {
+            runner.run(() -> {
+                workflow.insert(new PolicyGuard(ownerOrg, 1));
+                Integer backend = secondary.queryForObject("SELECT pg_backend_pid()", Integer.class);
+                boolean autocommit = Boolean.TRUE.equals(secondary.execute((ConnectionCallback<Boolean>) Connection::getAutoCommit));
+                require(backend != null && backend != identity().backend() && autocommit
+                                && TransactionSynchronizationManager.hasResource(secondaryDataSource),
+                        "a distinct autocommit connection must be synchronized by the read");
+                System.out.printf("SECONDARY read bound backend=%d autocommit=%s%n", backend, autocommit);
+                try {
+                    secondaryRecords.insert(new PolicyGuard(secondaryOrg, 1));
+                } catch (IllegalStateException expected) {
+                    rejected[0] = true;
+                }
+                if (rejected[0]) {
+                    mustReject(() -> secondaryRecords.find(secondaryOrg));
+                    mustReject(() -> secondaryReceipts.find(new ReceiptKey("issuer", secondaryOrg, "principal", "token")));
+                }
+                throw injected;
+            });
+            throw new AssertionError("ownership probe returned success after injected rollback");
+        } catch (Fault actual) {
+            require(actual == injected, "ownership probe must roll back through the runner");
+        }
+        List<String> durable = observer.queryForList("""
+                SELECT organization FROM requests.policy_guard WHERE organization IN (?, ?) ORDER BY organization
+                """, String.class, ownerOrg.value(), secondaryOrg.value());
+        System.out.printf("SECONDARY mapper rejected=%s authoritative post-rollback rows=%s%n", rejected[0], durable);
+        require(rejected[0] && durable.isEmpty(), "a synchronized secondary data source escaped ownership or rollback");
+        new JdbcTransactionRunner(secondaryDataSource).run(() -> {
+            require(secondaryRecords.find(secondaryOrg).isEmpty(), "new owner must work after the earlier rollback");
+            return null;
+        });
+        System.out.println("PASS bound secondary mapper rejected, no durable side effect, and next owner admitted");
     }
 
     private void verifyEffects(boolean prior) {
