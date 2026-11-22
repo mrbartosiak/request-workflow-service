@@ -23,7 +23,7 @@ import java.util.function.Function;
 
 /** Current submitted, result and field access for the configured synthetic scope. */
 public final class CurrentAccess {
-    private static final Set<Field> CREATE_RESULT_FIELDS = Set.of(
+    private static final Set<Field> RESULT_FIELDS = Set.of(
             Field.REF, Field.ACTION, Field.RESULT_REVISION, Field.STATE);
 
     private final ScopeAuthority authority;
@@ -110,7 +110,7 @@ public final class CurrentAccess {
         if (effective == null) {
             return policy(actor).grant(actor).createResult().contains(target.type());
         }
-        return fields(actor, guard, target).containsAll(CREATE_RESULT_FIELDS);
+        return fields(actor, guard, target).containsAll(RESULT_FIELDS);
     }
 
     /** Field membership for an internal reader already holding the organization's shared or exclusive guard. */
@@ -130,6 +130,53 @@ public final class CurrentAccess {
             throw new AuthorityUnavailableException();
         }
         return requireProof(policy(actor), guard);
+    }
+
+    /** Current scope prerequisite for an internal dispatcher holding the organization's guard. */
+    public Admission requireDispatchScope(PolicyGuard guard) {
+        var policy = policies.get(guard.organization());
+        if (effective == null || policy == null) {
+            throw new AuthorityUnavailableException();
+        }
+        return requireProof(policy, guard);
+    }
+
+    Admission requireSubmittedAction(AuthenticatedActor actor, RequestRef ref, Action action) {
+        var guard = shared(actor);
+        return requireSubmittedAction(actor, guard, ref, action);
+    }
+
+    Admission requireSubmittedAction(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref, Action action) {
+        var admission = requireActionScope(actor, guard);
+        actionTarget(actor, guard, ref, action).orElseThrow(TargetConcealed::new);
+        return admission;
+    }
+
+    static final class TargetConcealed extends RuntimeException { }
+
+    /** Current disclosure for the original side of an exact replay or cross-route conflict. */
+    boolean permitsReceipt(AuthenticatedActor actor, PolicyGuard guard, OperationReceipt receipt) {
+        try {
+            if (receipt.action() == Action.CREATE) {
+                return effective.requests().find(actor.organization(), receipt.resultRef())
+                        .filter(target -> target.ref().equals(receipt.resultRef()))
+                        .filter(target -> target.creationOrder().epoch() == receipt.keyGeneration())
+                        .filter(target -> permitted(policy(actor), guard, actor, Grant.CREATE, target.type()))
+                        .filter(target -> permitsCreateResult(actor, guard, target)).isPresent();
+            }
+            var resultGrant = switch (receipt.action()) {
+                case EDIT -> Grant.RESULT_READ_EDIT;
+                case VERIFY -> Grant.RESULT_READ_VERIFY;
+                case ACCEPT -> Grant.RESULT_READ_ACCEPT;
+                default -> null;
+            };
+            return resultGrant != null && actionTarget(actor, guard, receipt.resultRef(), receipt.action())
+                    .filter(target -> target.visibility().fields().containsAll(RESULT_FIELDS))
+                    .filter(target -> permitted(policy(actor), guard, actor, resultGrant, target.request().type()))
+                    .isPresent();
+        } catch (AccessDeniedException denied) {
+            return false;
+        }
     }
 
     /** The caller has proved the current scope on the guard before asking about a target. */

@@ -30,21 +30,25 @@ public final class ScopeAuthorityMutation {
         return transactions.run(() -> {
             var guard = guards.lockExclusive(admission.genesis().organization())
                     .orElseThrow(AuthorityUnavailableException::new);
-            var plan = planChange.apply(guard);
-            var local = witnesses.begin(admission, guard, plan.delta());
-            var registered = journal.register(local);
-            if (!registered.attempt().equals(local.attempt()) || registered.state() != State.REGISTERED) {
-                throw new AuthorityUnavailableException();
-            }
-            // An uncertain prepare terminates this callback before any local effect.
-            var prepared = journal.prepare(local.attempt(), plan.delta());
-            if (!prepared.attempt().equals(local.attempt()) || prepared.state() != State.PENDING) {
-                throw new AuthorityUnavailableException();
-            }
-            T result = plan.apply().apply(prepared);
-            witnesses.append(prepared);
-            return new LocalCommit<>(prepared, result);
+            return apply(admission, guard, planChange.apply(guard));
         });
+    }
+
+    /** Apply a planned scope change on the caller's owned, exclusively guarded command transaction. */
+    public <T> LocalCommit<T> apply(Admission admission, PolicyGuard guard, Plan<T> plan) {
+        var local = witnesses.begin(admission, guard, plan.delta());
+        var registered = journal.register(local);
+        if (!registered.attempt().equals(local.attempt()) || registered.state() != State.REGISTERED) {
+            throw new AuthorityUnavailableException();
+        }
+        // An uncertain prepare terminates this callback before any local effect.
+        var prepared = journal.prepare(local.attempt(), plan.delta());
+        if (!prepared.attempt().equals(local.attempt()) || prepared.state() != State.PENDING) {
+            throw new AuthorityUnavailableException();
+        }
+        T result = plan.apply().apply(prepared);
+        witnesses.append(prepared);
+        return new LocalCommit<>(prepared, result);
     }
 
     public record Plan<T>(Delta delta, Function<Entry, T> apply) { }

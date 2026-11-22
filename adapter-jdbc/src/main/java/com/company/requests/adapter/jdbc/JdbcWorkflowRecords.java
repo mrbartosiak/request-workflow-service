@@ -1,5 +1,8 @@
 package com.company.requests.adapter.jdbc;
 
+import com.company.requests.application.AuthorityUnavailableException;
+import com.company.requests.application.EffectiveScopeStore.Field;
+import com.company.requests.application.ExistingRequestStore;
 import com.company.requests.application.PolicyGuard;
 import com.company.requests.application.PolicyGuardStore;
 import com.company.requests.application.RequestStore;
@@ -22,7 +25,7 @@ import java.util.Optional;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-public final class JdbcWorkflowRecords implements RequestStore, PolicyGuardStore {
+public final class JdbcWorkflowRecords implements RequestStore, ExistingRequestStore, PolicyGuardStore {
     private final DataSource dataSource;
     private final JdbcTemplate jdbc;
 
@@ -51,6 +54,53 @@ public final class JdbcWorkflowRecords implements RequestStore, PolicyGuardStore
         JdbcTransactionRunner.requireBoundConnection(dataSource);
         jdbc.update("INSERT INTO requests.request_body (organization, ref, body) VALUES (?, ?, ?)",
                 organization.value(), ref.value(), body.value());
+    }
+
+    @Override
+    public void lockForChange(PolicyGuard guard, RequestRef ref, Field material) {
+        JdbcTransactionRunner.requireExclusiveGuard(dataSource, guard);
+        var organization = guard.organization().value();
+        var locked = jdbc.queryForList("""
+                SELECT 1 FROM requests.request
+                WHERE organization = ? AND ref = ? FOR UPDATE
+                """, Integer.class, organization, ref.value());
+        if (locked.size() != 1) {
+            throw new AuthorityUnavailableException();
+        }
+        if (material == Field.BODY && jdbc.queryForList("""
+                SELECT 1 FROM requests.request_body
+                WHERE organization = ? AND ref = ? AND retention_status = 'RETAINED' FOR UPDATE
+                """, Integer.class, organization, ref.value()).size() != 1) {
+            throw new AuthorityUnavailableException();
+        }
+    }
+
+    @Override
+    public void advance(PolicyGuard guard, Request before, Request after) {
+        JdbcTransactionRunner.requireExclusiveGuard(dataSource, guard);
+        if (!guard.organization().equals(before.organization()) || !before.organization().equals(after.organization())
+                || !before.ref().equals(after.ref()) || !before.publicationId().equals(after.publicationId())
+                || after.revision() != Math.incrementExact(before.revision())) {
+            throw new IllegalArgumentException("The lifecycle update must advance the same scoped request.");
+        }
+        if (jdbc.update("""
+                UPDATE requests.request SET state = ?, revision = ?, last_sequence = ?
+                WHERE organization = ? AND ref = ? AND state = ? AND revision = ? AND last_sequence = ?
+                """, after.state().name(), after.revision(), after.lastSequence(), guard.organization().value(),
+                before.ref().value(), before.state().name(), before.revision(), before.lastSequence()) != 1) {
+            throw new AuthorityUnavailableException();
+        }
+    }
+
+    @Override
+    public void replaceBody(PolicyGuard guard, RequestRef ref, RequestBody body) {
+        JdbcTransactionRunner.requireExclusiveGuard(dataSource, guard);
+        if (jdbc.update("""
+                UPDATE requests.request_body SET body = ?
+                WHERE organization = ? AND ref = ? AND retention_status = 'RETAINED'
+                """, body.value(), guard.organization().value(), ref.value()) != 1) {
+            throw new AuthorityUnavailableException();
+        }
     }
 
     @Override

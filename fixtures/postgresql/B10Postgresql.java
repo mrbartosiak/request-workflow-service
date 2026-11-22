@@ -125,6 +125,13 @@ public final class B10Postgresql {
                   QualifyPostgresql.SqlConnection projector, QualifyPostgresql.SqlConnection resolver,
                   QualifyPostgresql.SqlConnection createProof, B10FixtureSources sources,
                   UnaryOperator<Connection> decorate) throws SQLException {
+        this(workflow, proof, projector, resolver, createProof, sources, decorate, POLICY);
+    }
+
+    B10Postgresql(QualifyPostgresql.Connections workflow, QualifyPostgresql.Connections proof,
+                  QualifyPostgresql.SqlConnection projector, QualifyPostgresql.SqlConnection resolver,
+                  QualifyPostgresql.SqlConnection createProof, B10FixtureSources sources,
+                  UnaryOperator<Connection> decorate, SyntheticScopePolicy policy) throws SQLException {
         workflowAdmin = sources.source(workflow.migration());
         var proofAdmin = sources.source(proof.migration());
         workflowOwner = new JdbcTemplate(workflowAdmin);
@@ -141,7 +148,7 @@ public final class B10Postgresql {
         var actors = new SyntheticActorResolver("b10-issuer", "b10-audience", List.of(
                 new SyntheticActorResolver.Binding("original", token(), OWNER)));
         var secrets = new OperationSecrets(1, Map.of(1, bytes()), 1, Map.of(1, bytes()));
-        var settings = new SyntheticCreateConfiguration.Settings(command, createAuthority, POLICY, WRITER,
+        var settings = new SyntheticCreateConfiguration.Settings(command, createAuthority, policy, WRITER,
                 actors, Instant::now, secrets);
         profileSettings = new SyntheticEffectiveAccessConfiguration.Settings(settings, preparation, original,
                 projectorSource, resolverSource, OPERATORS);
@@ -166,6 +173,10 @@ public final class B10Postgresql {
 
     Components components() {
         return profile;
+    }
+
+    static SyntheticScopePolicy policy() {
+        return POLICY;
     }
 
     void pauseBeforeScopeWitness(CountDownLatch entered, CountDownLatch resume) {
@@ -232,7 +243,7 @@ public final class B10Postgresql {
         provisioning.migrate();
         provisioning.certifyWriter(WRITER);
         provisioning.certifyWorkflow(WRITER, JdbcWorkflowIdentity.inspect(command));
-        provisioning.certifyGenesis(ADMISSION.genesis());
+        provisioning.certifyGenesis(profileSettings.effectivePolicy().genesis());
         provisioning.certifyGenesis(new SyntheticScopePolicy(OTHER, 1, List.of()).genesis());
         provisioning.migrateScopeJournal();
         provisioning.migrateScopeResolver();
@@ -639,11 +650,18 @@ public final class B10Postgresql {
     }
 
     void confirm(PendingConfirmation result) {
-        require(profile.resolver().resolve(confirmer, ADMISSION, result.attemptId(), Operation.CONFIRM) == State.COMMITTED,
+        var admission = new Admission(profileSettings.effectivePolicy().genesis(), WRITER);
+        require(profile.resolver().resolve(confirmer, admission, result.attemptId(), Operation.CONFIRM) == State.COMMITTED,
                 "audited confirmation failed");
-        var checkpoint = journal.confirmedAuthority().current(ADMISSION);
+        var checkpoint = journal.confirmedAuthority().current(admission);
         require(checkpoint.policyVersion() == result.effectiveVersion() && checkpoint.sequence() == result.sequence()
                 && checkpoint.policyVersion() == version(), "exact confirmed policy version and sequence");
+    }
+
+    void abort(UUID attemptId) {
+        var admission = new Admission(profileSettings.effectivePolicy().genesis(), WRITER);
+        require(profile.resolver().resolve(confirmer, admission, attemptId, Operation.ABORT) == State.ABORTED,
+                "audited rollback resolution failed");
     }
 
     private void exact(PendingConfirmation result, EffectiveScopeChange change) {

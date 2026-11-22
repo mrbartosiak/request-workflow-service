@@ -6,7 +6,9 @@ import com.company.requests.adapter.authority.JdbcScopeAuthorityResolver;
 import com.company.requests.adapter.http.RestInputValidator;
 import com.company.requests.adapter.http.SyntheticActionContextController;
 import com.company.requests.adapter.http.SyntheticCreateController;
+import com.company.requests.adapter.http.SyntheticRequestActionController;
 import com.company.requests.adapter.jdbc.JdbcEffectiveScopeStore;
+import com.company.requests.adapter.jdbc.JdbcReceiptStore;
 import com.company.requests.adapter.jdbc.JdbcScopeAuthorityWitnesses;
 import com.company.requests.adapter.jdbc.JdbcScopeProjectionStore;
 import com.company.requests.adapter.jdbc.JdbcTransactionRunner;
@@ -19,7 +21,10 @@ import com.company.requests.application.CurrentAccess;
 import com.company.requests.application.EffectiveScopeGate;
 import com.company.requests.application.EffectiveScopeUpdates;
 import com.company.requests.application.GuardedRelease;
+import com.company.requests.application.IntentDigest;
 import com.company.requests.application.ObservationCodec;
+import com.company.requests.application.OperationKeyIssuer;
+import com.company.requests.application.RequestActionCommand;
 import com.company.requests.application.ScopeAuthorityMutation;
 import com.company.requests.application.ScopeProofResolver;
 import com.company.requests.application.SyntheticScopePolicy;
@@ -75,7 +80,8 @@ public class SyntheticEffectiveAccessConfiguration {
     }
 
     public record Components(CurrentAccess access, CreateCommand create, EffectiveScopeUpdates updates,
-                             ScopeProofResolver resolver, Optional<ActionContextService> actionContext) { }
+                             ScopeProofResolver resolver, Optional<ActionContextService> actionContext,
+                             Optional<RequestActionCommand> requestActions) { }
 
     @Bean
     public static Components effectiveScopeComponents(Settings settings) {
@@ -92,9 +98,8 @@ public class SyntheticEffectiveAccessConfiguration {
                 admission -> proof.requireWriter(admission, workflow.current()), store);
         var access = CurrentAccess.withEffectiveScope(create.writer(), List.of(policy),
                 transactions, records, records, store, gate);
-        var updates = new EffectiveScopeUpdates(policy, create.writer(),
-                new ScopeAuthorityMutation(transactions, records, journal, new JdbcScopeAuthorityWitnesses(command)),
-                gate, store, records);
+        var mutation = new ScopeAuthorityMutation(transactions, records, journal, new JdbcScopeAuthorityWitnesses(command));
+        var updates = new EffectiveScopeUpdates(policy, create.writer(), mutation, gate, store, records);
         var projector = settings.projection();
         var resolver = new ScopeProofResolver(JdbcTransactionRunner.forCreate(projector), new JdbcWorkflowRecords(projector),
                 new JdbcScopeAuthorityResolver(settings.resolver(), settings.originalObserver()),
@@ -102,8 +107,18 @@ public class SyntheticEffectiveAccessConfiguration {
         var contexts = settings.observationKeys().map(keys -> new ActionContextService(access, records, records,
                 new GuardedRelease(transactions, records, records, access, Duration.ofMillis(2400)),
                 new ObservationCodec(keys, create.secrets()), create.clock()));
+        var actions = contexts.flatMap(context -> create.guardedReplay().map(replay -> {
+            var receipts = new JdbcReceiptStore(command);
+            var keys = new OperationKeyIssuer(access, create.clock(), create.secrets(),
+                    OperationKeyIssuer.REFERENCE_ADMISSION_MARGIN);
+            var release = new GuardedRelease(transactions, records, records, access, Duration.ofMillis(2400),
+                    replay.handoffs());
+            return new RequestActionCommand(transactions, access, admission -> proof.requireWriter(admission, workflow.current()),
+                    keys, new IntentDigest(create.secrets()), receipts, receipts, records, records, context, policy,
+                    store, mutation, release, replay.preparation(), replay.originalReceipts());
+        }));
         return new Components(access, SyntheticCreateConfiguration.createCommand(create, transactions, records, access),
-                updates, resolver, contexts);
+                updates, resolver, contexts, actions);
     }
 
     @Bean
@@ -118,5 +133,13 @@ public class SyntheticEffectiveAccessConfiguration {
         var create = settings.create();
         return new SyntheticActionContextController(create.policy().genesis().organization(), create.actors(),
                 inputs, components.actionContext());
+    }
+
+    @Bean
+    SyntheticRequestActionController syntheticRequestActionController(Settings settings, Components components,
+                                                                      RestInputValidator inputs) {
+        var create = settings.create();
+        return new SyntheticRequestActionController(create.policy().genesis().organization(), create.actors(),
+                inputs, components.requestActions());
     }
 }

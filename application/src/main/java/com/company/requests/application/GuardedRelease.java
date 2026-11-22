@@ -177,6 +177,14 @@ public final class GuardedRelease {
                 && access.permitsCreateResult(actor, guard, target);
     }
 
+    boolean permitsReceipt(AuthenticatedActor actor, PolicyGuard guard, OperationReceipt receipt) {
+        if (access.usesEffectiveScope()) {
+            return access.permitsReceipt(actor, guard, receipt);
+        }
+        return isScopedCreate(receipt, actor) && requests.find(actor.organization(), receipt.resultRef())
+                .filter(target -> authorized(actor, guard, receipt, target)).isPresent();
+    }
+
     private static boolean isScopedCreate(OperationReceipt receipt, AuthenticatedActor actor) {
         return receipt.action() == Action.CREATE && receipt.key().organization().equals(actor.organization())
                 && receipt.key().issuer().equals(actor.issuer()) && receipt.key().principal().equals(actor.principal());

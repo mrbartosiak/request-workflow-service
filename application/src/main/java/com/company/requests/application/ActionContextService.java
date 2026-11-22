@@ -2,6 +2,7 @@ package com.company.requests.application;
 
 import com.company.requests.application.CurrentAccess.ActionTarget;
 import com.company.requests.application.EffectiveScopeStore.Field;
+import com.company.requests.application.EffectiveScopeStore.Visibility;
 import com.company.requests.application.ScopeAuthority.Admission;
 import com.company.requests.domain.Action;
 import com.company.requests.domain.Lifecycle;
@@ -13,6 +14,8 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /** Protected action context and the new-intent precondition shared by existing-request commands. */
@@ -46,7 +49,8 @@ public final class ActionContextService {
 
     public sealed interface Verification permits Verified, Rejection { }
 
-    public record Verified(Request request, PolicyGuard guard, Admission admission) implements Verification { }
+    public record Verified(Request request, PolicyGuard guard, Admission admission, Visibility visibility)
+            implements Verification { }
 
     public enum Rejection implements Reply, Verification, Inspection {
         CONCEALED, DENIED, ILLEGAL_STATE, MALFORMED, STALE
@@ -82,10 +86,17 @@ public final class ActionContextService {
      * Trusted exact replay follows the original receipt and its fresh disclosure gate.
      */
     public Verification verifyNewIntent(AuthenticatedActor actor, RequestRef ref, Action action, String token) {
+        return verifyNewIntent(actor, ref, action, token, ignored -> { }, Optional.empty());
+    }
+
+    Verification verifyNewIntent(AuthenticatedActor actor, RequestRef ref, Action action, String token,
+                                 Consumer<Admission> admit,
+                                 Optional<BiConsumer<PolicyGuard, Field>> lockTarget) {
         requireExistingAction(action);
         var guard = guards.lockExclusive(actor.organization()).orElseThrow(AuthorityUnavailableException::new);
         var admission = access.requireActionScope(actor, guard);
-        var current = inspect(actor, guard, ref, action);
+        admit.accept(admission);
+        var current = inspect(actor, guard, ref, action, lockTarget);
         if (current instanceof Rejection rejection) {
             return rejection;
         }
@@ -95,7 +106,8 @@ public final class ActionContextService {
             case MALFORMED -> Rejection.MALFORMED;
             case STALE -> Rejection.STALE;
             case MATCH -> eligible(allowed.target().request(), action)
-                    ? new Verified(allowed.target().request(), guard, admission) : Rejection.ILLEGAL_STATE;
+                    ? new Verified(allowed.target().request(), guard, admission, allowed.target().visibility())
+                    : Rejection.ILLEGAL_STATE;
         };
     }
 
@@ -116,6 +128,11 @@ public final class ActionContextService {
     }
 
     private Inspection inspect(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref, Action action) {
+        return inspect(actor, guard, ref, action, Optional.empty());
+    }
+
+    private Inspection inspect(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref, Action action,
+                               Optional<BiConsumer<PolicyGuard, Field>> lockTarget) {
         Optional<ActionTarget> found;
         try {
             found = access.actionTarget(actor, guard, ref, action);
@@ -126,6 +143,11 @@ public final class ActionContextService {
             return Rejection.CONCEALED;
         }
         var target = found.orElseThrow();
+        if (lockTarget.isPresent()) {
+            lockTarget.orElseThrow().accept(guard, target.materialField());
+            // Reread the exact target after acquiring its row and material locks.
+            return inspect(actor, guard, ref, action);
+        }
         String material = switch (target.materialField()) {
             case BODY -> requests.findRetainedBody(guard.organization(), ref)
                     .map(RequestBody::value).orElseThrow(AuthorityUnavailableException::new);

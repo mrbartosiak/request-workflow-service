@@ -1,8 +1,11 @@
 package com.company.requests.application;
 
 import com.company.requests.application.EffectiveScopeUpdates.Permission;
+import com.company.requests.application.EffectiveScopeStore.Visibility;
+import com.company.requests.domain.Action;
 import com.company.requests.domain.OrganizationId;
 import com.company.requests.domain.PersonId;
+import com.company.requests.domain.Request;
 import com.company.requests.domain.RequestType;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +17,7 @@ import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /** Immutable, scope-local directory bindings and explicit grants for the synthetic first slice. */
@@ -21,6 +25,7 @@ public final class SyntheticScopePolicy {
     private final ScopeAuthority.Genesis genesis;
     private final Map<Principal, Grant> grants;
     private final Map<Principal, Set<Permission>> mutationOperators;
+    private final Set<RequestType> assigneeOnlyOnAccept;
 
     public SyntheticScopePolicy(OrganizationId organization, long version, Collection<Grant> entries) {
         Map<Principal, Grant> byPrincipal = new HashMap<>();
@@ -32,14 +37,16 @@ public final class SyntheticScopePolicy {
         }
         grants = Map.copyOf(byPrincipal);
         mutationOperators = null;
+        assigneeOnlyOnAccept = Set.of();
         genesis = new ScopeAuthority.Genesis(organization, version, fingerprint(organization, version));
     }
 
     private SyntheticScopePolicy(ScopeAuthority.Genesis genesis, Map<Principal, Grant> grants,
-                                 Map<Principal, Set<Permission>> mutationOperators) {
+                                 Map<Principal, Set<Permission>> mutationOperators, Set<RequestType> assigneeOnlyOnAccept) {
         this.genesis = genesis;
         this.grants = grants;
         this.mutationOperators = mutationOperators;
+        this.assigneeOnlyOnAccept = assigneeOnlyOnAccept;
     }
 
     /** Certifies the immutable B10 operator rights alongside the ordinary directory and grants. */
@@ -71,7 +78,36 @@ public final class SyntheticScopePolicy {
         });
         var effective = new ScopeAuthority.Genesis(genesis.organization(), genesis.policyVersion(),
                 HexFormat.of().formatHex(digest.digest()));
-        return new SyntheticScopePolicy(effective, grants, Map.copyOf(bound));
+        return new SyntheticScopePolicy(effective, grants, Map.copyOf(bound), assigneeOnlyOnAccept);
+    }
+
+    /** Certifies the opt-in synthetic rule that restricts accepted rows to their assignee. */
+    public SyntheticScopePolicy withAssigneeOnlyOnAccept(Set<RequestType> types) {
+        var exact = Set.copyOf(types);
+        if (exact.isEmpty()) {
+            return this;
+        }
+        if (!assigneeOnlyOnAccept.isEmpty()) {
+            throw new IllegalStateException("Accepted visibility is already bound.");
+        }
+        var digest = sha256();
+        add(digest, "requests.synthetic-scope.accepted-assignee-visibility.v1");
+        add(digest, genesis.policyDigest());
+        for (RequestType type : RequestType.values()) {
+            add(digest, type.name());
+            add(digest, Boolean.toString(exact.contains(type)));
+        }
+        var effective = new ScopeAuthority.Genesis(genesis.organization(), genesis.policyVersion(),
+                HexFormat.of().formatHex(digest.digest()));
+        return new SyntheticScopePolicy(effective, grants, mutationOperators, exact);
+    }
+
+    Optional<EffectiveScopeChange.SetVisibility> visibilityChange(Action action, Request request, Visibility current) {
+        if (action != Action.ACCEPT || !assigneeOnlyOnAccept.contains(request.type()) || current.assigneeOnly()) {
+            return Optional.empty();
+        }
+        var next = new Visibility(Math.incrementExact(current.version()), true, current.fields());
+        return Optional.of(new EffectiveScopeChange.SetVisibility(request.ref(), current, next));
     }
 
     boolean permitsMutation(AuthenticatedActor actor, Permission permission) {
