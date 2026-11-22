@@ -80,6 +80,42 @@ final class SyntheticActorResolverTest {
                 List.of(first, new SyntheticActorResolver.Binding("second-login", ALIAS, differentPerson))));
     }
 
+    @Test
+    void rejectsDistinctStableActorsForTheSameScopedSubject() {
+        String subject = "shared-subject";
+        var first = new SyntheticActorResolver.Binding(subject, FIRST, HUMAN);
+        var otherPrincipal = new AuthenticatedActor(ISSUER, ORG, "other-principal", Kind.HUMAN, HUMAN.person());
+        for (var conflictingActor : List.of(otherPrincipal, ROBOT)) {
+            var conflicting = new SyntheticActorResolver.Binding(subject, ALIAS, conflictingActor);
+            var rejection = assertThrows(IllegalArgumentException.class,
+                    () -> new SyntheticActorResolver(ISSUER, AUDIENCE, List.of(first, conflicting)));
+            for (String protectedValue : List.of(subject, FIRST, ALIAS, HUMAN.principal(), conflictingActor.principal())) {
+                assertFalse(rejection.getMessage().contains(protectedValue));
+            }
+        }
+    }
+
+    @Test
+    void allowsAliasesAndCredentialRotationWithoutConflatingOrganizations() {
+        String subject = "scoped-login";
+        String rotated = token(4);
+        String otherSecret = token(5);
+        var otherActor = new AuthenticatedActor(ISSUER, OTHER, "other-principal", Kind.HUMAN,
+                Optional.of(new PersonId("other-person")));
+        var directory = new SyntheticActorResolver(ISSUER, AUDIENCE, List.of(
+                new SyntheticActorResolver.Binding(subject, FIRST, HUMAN),
+                new SyntheticActorResolver.Binding(subject, rotated, HUMAN),
+                new SyntheticActorResolver.Binding("alias-login", ALIAS, HUMAN),
+                new SyntheticActorResolver.Binding(subject, otherSecret, otherActor)));
+
+        assertEquals(Optional.of(HUMAN), directory.resolve(new Credential(ISSUER, AUDIENCE, subject, FIRST), ORG));
+        assertEquals(Optional.of(HUMAN), directory.resolve(new Credential(ISSUER, AUDIENCE, subject, rotated), ORG));
+        assertEquals(Optional.of(HUMAN), directory.resolveBearer(request("Bearer " + ALIAS), ORG));
+        assertEquals(Optional.of(otherActor), directory.resolve(new Credential(ISSUER, AUDIENCE, subject, otherSecret), OTHER));
+        assertTrue(directory.resolve(new Credential(ISSUER, AUDIENCE, subject, rotated), OTHER).isEmpty());
+        assertTrue(directory.resolveBearer(request("Bearer " + otherSecret), ORG).isEmpty());
+    }
+
     private static MockHttpServletRequest request(String header) {
         var request = new MockHttpServletRequest();
         request.addHeader(HttpHeaders.AUTHORIZATION, header);

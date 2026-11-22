@@ -29,6 +29,7 @@ public final class SyntheticActorResolver implements ActorResolver {
         this.audience = requireText(audience);
         Map<String, DirectoryEntry> byCredential = new HashMap<>();
         Map<OrganizationId, Map<String, AuthenticatedActor>> principals = new HashMap<>();
+        Map<ScopedSubject, AuthenticatedActor> subjects = new HashMap<>();
         for (Binding binding : bindings) {
             var actor = binding.actor();
             if (!issuer.equals(actor.issuer()) || !validToken(binding.secret())
@@ -39,6 +40,10 @@ public final class SyntheticActorResolver implements ActorResolver {
             var prior = inScope.putIfAbsent(actor.principal(), actor);
             if (prior != null && !prior.equals(actor)) {
                 throw new IllegalArgumentException("Aliases must agree on their stable actor binding.");
+            }
+            var priorSubject = subjects.putIfAbsent(new ScopedSubject(actor.organization(), binding.subject()), actor);
+            if (priorSubject != null && !priorSubject.equals(actor)) {
+                throw new IllegalArgumentException("Credentials for a scoped subject must agree on their stable actor binding.");
             }
         }
         entries = Map.copyOf(byCredential);
@@ -112,4 +117,6 @@ public final class SyntheticActorResolver implements ActorResolver {
     }
 
     private record DirectoryEntry(String subject, AuthenticatedActor actor) { }
+
+    private record ScopedSubject(OrganizationId organization, String subject) { }
 }
