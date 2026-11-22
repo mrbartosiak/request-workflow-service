@@ -1,0 +1,59 @@
+package com.company.requests.adapter.jdbc;
+
+import java.util.List;
+import javax.sql.DataSource;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+
+/** Explicit PostgreSQL fixture migrations. Use the separately provisioned schema owner. */
+public final class JdbcWorkflowMigrations {
+    private static final List<String> SCRIPTS = List.of(
+            "db/workflow/V001__policy_guard.sql", "db/workflow/V002__local_records.sql");
+
+    private final JdbcTransactionRunner runner;
+    private final JdbcTemplate jdbc;
+
+    public JdbcWorkflowMigrations(DataSource migrationDataSource) {
+        runner = new JdbcTransactionRunner(migrationDataSource);
+        jdbc = new JdbcTemplate(migrationDataSource);
+    }
+
+    public void migrate() {
+        migrateThrough(SCRIPTS.size());
+    }
+
+    void migrateThrough(int targetVersion) {
+        runner.run(() -> {
+            // Serialize creation of the schema and its migration history as well as upgrades.
+            jdbc.execute("SELECT pg_advisory_xact_lock(1919250805, 1)");
+            jdbc.execute("CREATE SCHEMA IF NOT EXISTS requests");
+            jdbc.execute("""
+                    CREATE TABLE IF NOT EXISTS requests.schema_migration (
+                        version integer PRIMARY KEY CHECK (version > 0)
+                    )
+                    """);
+            List<Integer> applied = jdbc.queryForList(
+                    "SELECT version FROM requests.schema_migration ORDER BY version", Integer.class);
+            if (applied.size() > targetVersion) {
+                throw new IllegalStateException("Workflow schema is newer than the requested migration level.");
+            }
+            for (int i = 0; i < applied.size(); i++) {
+                if (applied.get(i) != i + 1) {
+                    throw new IllegalStateException("Workflow migration history has a gap.");
+                }
+            }
+            for (int i = applied.size(); i < targetVersion; i++) {
+                var script = new ResourceDatabasePopulator(new ClassPathResource(SCRIPTS.get(i)));
+                script.setSqlScriptEncoding("UTF-8");
+                jdbc.execute((ConnectionCallback<Void>) connection -> {
+                    script.populate(connection);
+                    return null;
+                });
+                jdbc.update("INSERT INTO requests.schema_migration(version) VALUES (?)", i + 1);
+            }
+            return null;
+        });
+    }
+}

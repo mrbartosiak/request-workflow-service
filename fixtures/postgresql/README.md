@@ -56,3 +56,58 @@ if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL fixture cleanup failed' }
 | Restored workflow | `jdbc:postgresql://127.0.0.1:55482/workflow_db` | Restored workflow identities from the physical image |
 
 The probe requires SCRAM authentication and uses explicit loopback, connect/login/socket deadlines, and server-side statement, lock and idle-in-transaction budgets. Runtime roles have `CONNECT`, schema `USAGE` and the fixture table's `SELECT`, `INSERT` and `UPDATE`. B05 and B32 inherit this separation of migration, command, proof and observation responsibilities. Provision per-run credentials and scope grants to the schema operations of the next reviewed fixture under G1-U. The B04 probe tears down the endpoints and does not export secrets.
+
+## Run the B05 local storage and transaction checks
+
+Use the G1-U-authorized binary and dependency pins. This entry point initializes one fresh workflow cluster at `127.0.0.1:55480/workflow_db` with the same SCRAM, UTF-8 and session limits as B04. Reserve 55480 across both runs. The check provisions the B05 schema using `b04_admin` and grants `b04_workflow` SELECT/INSERT on the five workflow tables and `b04_observer` SELECT. Each role gets a distinct generated password through the fixture's connection factory.
+
+Run from the candidate checkout. Set `$workspace` to the main workspace with the approved tools. Create a separate scratch root and copy the qualified cache once. Use fresh B05 run IDs for each invocation.
+
+```powershell
+$workspace = (Resolve-Path '<main workspace root>').Path
+$phase = Join-Path $workspace 'tmp/phase5-development'
+$b04 = Join-Path $phase 'b04-fixture'
+$b05 = Join-Path $phase 'b05-fixture'
+$cache = Join-Path $b05 'm2/repository'
+$runs = Join-Path $b05 'runs'
+$bin = Join-Path $b04 'runtime/pgsql/bin'
+$settings = Join-Path $phase 'b01-tools/m2/settings.xml'
+$env:JAVA_HOME = Join-Path $phase 'b01-tools/temurin/jdk-25.0.5.1+2'
+$env:MAVEN_SKIP_RC = 'true'
+$maven = 'C:/Program Files/Apache/apache-maven-3.9.16/bin/mvn.cmd'
+$java = Join-Path $env:JAVA_HOME 'bin/java.exe'
+$launcher = 'fixtures/postgresql/B05Postgresql.java'
+
+New-Item -ItemType Directory -Force -Path $runs, (Split-Path -Parent $cache) | Out-Null
+if (!(Test-Path -LiteralPath $cache)) {
+    Copy-Item -LiteralPath (Join-Path $b04 'm2/qualified-repository') -Destination $cache -Recurse
+}
+& $maven -o -B -C -ntp -s $settings -gs $settings "-Dmaven.repo.local=$cache" clean verify
+if ($LASTEXITCODE -ne 0) { throw 'Offline reactor build failed' }
+
+$entries = @('adapter-jdbc/target/test-classes', 'adapter-jdbc/target/classes',
+    'application/target/classes', 'domain/target/classes')
+$jars = @(
+    'org/springframework/spring-jdbc/7.0.11/spring-jdbc-7.0.11.jar',
+    'org/springframework/spring-tx/7.0.11/spring-tx-7.0.11.jar',
+    'org/springframework/spring-beans/7.0.11/spring-beans-7.0.11.jar',
+    'org/springframework/spring-core/7.0.11/spring-core-7.0.11.jar',
+    'commons-logging/commons-logging/1.3.5/commons-logging-1.3.5.jar',
+    'org/jspecify/jspecify/1.0.1/jspecify-1.0.1.jar',
+    'org/postgresql/postgresql/42.7.14/postgresql-42.7.14.jar',
+    'org/checkerframework/checker-qual/3.55.1/checker-qual-3.55.1.jar'
+)
+$entries += $jars | ForEach-Object { Join-Path $cache $_ }
+$classpath = ($entries | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }) -join ';'
+& $java --class-path $classpath $launcher run $bin $runs b05-empty-example empty
+if ($LASTEXITCODE -ne 0) { throw 'Empty namespace check failed' }
+& $java --class-path $classpath $launcher run $bin $runs b05-prior-example prior
+if ($LASTEXITCODE -ne 0) { throw 'V001 upgrade check failed' }
+```
+
+The launcher checks `pg_ctl` status and loopback availability in teardown. If a run is interrupted, wait for the launcher to exit and repeat with `cleanup`, the same bin, scratch path, run ID and mode. Each run writes native diagnostics to its own private scratch directory. The application artifacts compile without the fixture driver or test entry point.
+
+```powershell
+& $java --class-path $classpath $launcher cleanup $bin $runs b05-prior-example prior
+if ($LASTEXITCODE -ne 0) { throw 'B05 workflow cleanup failed' }
+```

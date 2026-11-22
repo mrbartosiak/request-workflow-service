@@ -108,6 +108,63 @@ public final class QualifyPostgresql {
         return List.of(workflow, proof, restore);
     }
 
+    /** Reuse the qualified setup and teardown for a workflow-only fixture check. */
+    static void workflowOnly(String[] args, WorkflowCheck check) throws Exception {
+        require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),
+                "Usage: run|cleanup BIN RUNS_DIRECTORY b05-RUN_ID");
+        require(args[3].matches("b05-[a-z0-9-]{1,32}"), "Invalid B05 run ID");
+        require(Runtime.version().feature() == 25, "Java 25 required");
+        Path bin = Path.of(args[1]).toRealPath();
+        Path runs = Path.of(args[2]).toRealPath();
+        require(Files.isDirectory(runs) && runs.getFileName().toString().equals("runs"), "Use the fixture scratch runs directory");
+        Path run = runs.resolve(args[3]);
+        Path owner = run.resolve("b05-run-id");
+        QualifyPostgresql probe = new QualifyPostgresql(bin, run);
+        if (args[0].equals("cleanup")) {
+            require(run.equals(run.toRealPath()) && owner.equals(owner.toRealPath())
+                    && Files.readString(owner).equals(args[3]), "Cleanup requires the original B05 run directory");
+            probe.stopWorkflowOnly();
+            return;
+        }
+        requirePortFree(probe.workflow.port);
+        Files.createDirectory(run);
+        Files.writeString(owner, args[3], StandardOpenOption.CREATE_NEW);
+        System.out.printf("B05 workflow run=%s Java=%s UTC start=%s%n", run, Runtime.version(), Instant.now());
+        try {
+            probe.initialize(probe.workflow, probe.workflowWriter, probe.workflowObserver, null);
+            probe.inspect(probe.workflow, probe.workflowWriter, probe.workflowObserver);
+            check.run(() -> connect(probe.workflow, probe.workflowAdmin),
+                    () -> connect(probe.workflow, probe.workflowWriter),
+                    () -> connect(probe.workflow, probe.workflowObserver));
+        } catch (Exception | Error failure) {
+            try {
+                probe.stopWorkflowOnly();
+            } catch (Exception cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+        probe.stopWorkflowOnly();
+        System.out.println("PASS B05 workflow and teardown " + Instant.now());
+    }
+
+    private void stopWorkflowOnly() throws Exception {
+        Files.deleteIfExists(initPasswordFile(workflow));
+        if (Files.exists(workflow.data.resolve("PG_VERSION"), LinkOption.NOFOLLOW_LINKS)) {
+            stop(workflow);
+        }
+    }
+
+    @FunctionalInterface
+    interface WorkflowCheck {
+        void run(SqlConnection migration, SqlConnection command, SqlConnection observer) throws Exception;
+    }
+
+    @FunctionalInterface
+    interface SqlConnection {
+        Connection open() throws SQLException;
+    }
+
     private void qualify() throws Exception {
         require(Runtime.version().feature() == 25, "Java 25 required");
         System.out.printf("B04 run=%s Java=%s Windows=%s %s%n", run, Runtime.version(),
