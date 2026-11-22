@@ -46,6 +46,10 @@ public final class QualifyPostgresql {
     private final Role workflowResolver = new Role("b11_projection");
     private final Role proofResolver = new Role("b11_resolver");
     private final Role proofCreate = new Role("b10_create_proof");
+    private final Role releasePrep = new Role("b12_prepare");
+    private final Role releaseHandoff = new Role("b12_handoff");
+    private final Role releaseClient = new Role("b12_client");
+    private final Role releaseReader = new Role("b12_reader");
     private final Cluster workflow;
     private final Cluster proof;
     private final Cluster restore;
@@ -194,6 +198,10 @@ public final class QualifyPostgresql {
         workflowAndProof(args, "b10", null, null, null, check);
     }
 
+    static void guardedRelease(String[] args, ReleaseCheck check) throws Exception {
+        workflowAndProof(args, "b12", null, null, null, null, check);
+    }
+
     static void publicationProofAndRestore(String[] args, ScopeResolverCheck check) throws Exception {
         workflowAndProof(args, "b16", null, null, check);
     }
@@ -201,10 +209,17 @@ public final class QualifyPostgresql {
     private static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check,
                                          ScopeProofCheck scopeCheck, ScopeResolverCheck resolverCheck,
                                          EffectiveScopeCheck effectiveCheck) throws Exception {
-        boolean withEffective = effectiveCheck != null;
+        workflowAndProof(args, ticket, check, scopeCheck, resolverCheck, effectiveCheck, null);
+    }
+
+    private static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check,
+                                         ScopeProofCheck scopeCheck, ScopeResolverCheck resolverCheck,
+                                         EffectiveScopeCheck effectiveCheck, ReleaseCheck releaseCheck) throws Exception {
+        boolean withRelease = releaseCheck != null;
+        boolean withEffective = effectiveCheck != null || withRelease;
         boolean withResolver = resolverCheck != null || withEffective;
-        boolean withRestore = scopeCheck != null || resolverCheck != null;
-        require(List.of("b06", "b08", "b09", "b10", "b11", "b16").contains(ticket),
+        boolean withRestore = scopeCheck != null || resolverCheck != null || withRelease;
+        require(List.of("b06", "b08", "b09", "b10", "b11", "b12", "b16").contains(ticket),
                 "Unexpected dual-cluster fixture ticket");
         String label = ticket.toUpperCase(Locale.ROOT);
         require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),
@@ -233,7 +248,16 @@ public final class QualifyPostgresql {
         System.out.printf("%s run=%s Java=%s UTC start=%s%n", label, run, Runtime.version(), Instant.now());
         try {
             WorkflowAndProofCheck operation = check;
-            if (withEffective) {
+            if (withRelease) {
+                operation = (workflow, proof) -> releaseCheck.run(workflow, proof,
+                        () -> connect(probe.workflow, probe.workflowResolver),
+                        () -> connect(probe.proof, probe.proofResolver),
+                        () -> connect(probe.proof, probe.proofCreate),
+                        new ReleaseLogins(() -> connect(probe.proof, probe.releasePrep),
+                                () -> connect(probe.proof, probe.releaseHandoff),
+                                () -> connect(probe.proof, probe.releaseClient),
+                                () -> connect(probe.proof, probe.releaseReader)), probe::restoreWorkflowSnapshot);
+            } else if (withEffective) {
                 operation = (workflow, proof) -> effectiveCheck.run(workflow, proof,
                         () -> connect(probe.workflow, probe.workflowResolver),
                         () -> connect(probe.proof, probe.proofResolver),
@@ -245,7 +269,7 @@ public final class QualifyPostgresql {
             } else if (withRestore) {
                 operation = (workflow, proof) -> scopeCheck.run(workflow, proof, probe::restoreWorkflowSnapshot);
             }
-            probe.runDualCheck(operation, withRestore, withResolver, withEffective);
+            probe.runDualCheck(operation, withRestore, withResolver, withEffective, withRelease);
         } catch (Exception | Error failure) {
             try {
                 probe.dualCleanup(withRestore);
@@ -259,11 +283,13 @@ public final class QualifyPostgresql {
     }
 
     private void runDualCheck(WorkflowAndProofCheck check, boolean withRestore, boolean withResolver,
-                              boolean withEffective) throws Exception {
+                              boolean withEffective, boolean withRelease) throws Exception {
         initialize(workflow, workflowWriter, workflowObserver, withRestore ? workflowBackup : null,
                 withResolver ? workflowResolver : null);
-        initialize(proof, proofWriter, proofObserver, null, withResolver ? proofResolver : null,
-                withEffective ? proofCreate : null);
+        Role[] extraProofRoles = withRelease
+                ? new Role[]{proofCreate, releasePrep, releaseHandoff, releaseClient, releaseReader}
+                : withEffective ? new Role[]{proofCreate} : new Role[0];
+        initialize(proof, proofWriter, proofObserver, null, withResolver ? proofResolver : null, extraProofRoles);
         inspect(workflow, workflowWriter, workflowObserver);
         inspect(proof, proofWriter, proofObserver);
         denyConnection(workflow, proofWriter.name, proofWriter.password, "28000");
@@ -328,6 +354,14 @@ public final class QualifyPostgresql {
     interface EffectiveScopeCheck {
         void run(Connections workflow, Connections proof, SqlConnection workflowProjector,
                  SqlConnection proofResolver, SqlConnection proofCreate) throws Exception;
+    }
+
+    record ReleaseLogins(SqlConnection preparation, SqlConnection handoff, SqlConnection client, SqlConnection reader) { }
+
+    @FunctionalInterface
+    interface ReleaseCheck {
+        void run(Connections workflow, Connections proof, SqlConnection workflowProjector, SqlConnection proofResolver,
+                 SqlConnection createProof, ReleaseLogins releaseLogins, ScopeRestore restore) throws Exception;
     }
 
     @FunctionalInterface
@@ -442,10 +476,10 @@ public final class QualifyPostgresql {
     }
 
     private void initialize(Cluster cluster, Role writer, Role observer, Role backup, Role resolver) throws Exception {
-        initialize(cluster, writer, observer, backup, resolver, null);
+        initialize(cluster, writer, observer, backup, resolver, new Role[0]);
     }
 
-    private void initialize(Cluster cluster, Role writer, Role observer, Role backup, Role resolver, Role additional)
+    private void initialize(Cluster cluster, Role writer, Role observer, Role backup, Role resolver, Role... additional)
             throws Exception {
         Path passwordFile = initPasswordFile(cluster);
         Files.writeString(passwordFile, cluster.admin.password + "\n", StandardOpenOption.CREATE_NEW);
@@ -480,8 +514,8 @@ public final class QualifyPostgresql {
         if (resolver != null) {
             hba += hbaRule(cluster.database, resolver.name);
         }
-        if (additional != null) {
-            hba += hbaRule(cluster.database, additional.name);
+        for (Role role : additional) {
+            hba += hbaRule(cluster.database, role.name);
         }
         Files.writeString(cluster.data.resolve("pg_hba.conf"), hba, StandardOpenOption.TRUNCATE_EXISTING);
         start(cluster);
@@ -503,10 +537,10 @@ public final class QualifyPostgresql {
                 runSql(admin, "GRANT CONNECT ON DATABASE " + cluster.database + " TO " + resolver.name);
                 denyConnection(cluster, resolver.name, resolver.password + "wrong", "28P01");
             }
-            if (additional != null) {
-                createLogin(admin, additional, "NOREPLICATION");
-                runSql(admin, "GRANT CONNECT ON DATABASE " + cluster.database + " TO " + additional.name);
-                denyConnection(cluster, additional.name, additional.password + "wrong", "28P01");
+            for (Role role : additional) {
+                createLogin(admin, role, "NOREPLICATION");
+                runSql(admin, "GRANT CONNECT ON DATABASE " + cluster.database + " TO " + role.name);
+                denyConnection(cluster, role.name, role.password + "wrong", "28P01");
             }
         }
         try (Connection admin = connect(cluster, cluster.admin)) {

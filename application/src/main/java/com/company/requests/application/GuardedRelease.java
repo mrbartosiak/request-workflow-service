@@ -1,17 +1,23 @@
 package com.company.requests.application;
 
+import com.company.requests.application.ScopeAuthority.Admission;
 import com.company.requests.domain.Action;
+import com.company.requests.domain.OrganizationId;
+import com.company.requests.domain.Request;
 import com.company.requests.domain.RequestState;
 import com.company.requests.domain.RequestType;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
-/** Fresh organization-guarded handoff for a trusted committed Create receipt. */
+/** Shared, fresh organization disclosure gate through acceptance by a bounded outgoing buffer. */
 public final class GuardedRelease {
     private static final Duration MAX_WINDOW = Duration.ofMillis(2400);
     private final TransactionRunner transactions;
@@ -19,13 +25,20 @@ public final class GuardedRelease {
     private final RequestStore requests;
     private final CurrentAccess access;
     private final long budgetNanos;
+    private final ReleaseEvidence.Handoffs handoffEvidence;
 
     public GuardedRelease(TransactionRunner transactions, PolicyGuardStore guards, RequestStore requests,
                           CurrentAccess access, Duration window) {
+        this(transactions, guards, requests, access, window, ignored -> { });
+    }
+
+    public GuardedRelease(TransactionRunner transactions, PolicyGuardStore guards, RequestStore requests,
+                          CurrentAccess access, Duration window, ReleaseEvidence.Handoffs handoffEvidence) {
         this.transactions = Objects.requireNonNull(transactions, "transactions");
         this.guards = Objects.requireNonNull(guards, "guards");
         this.requests = Objects.requireNonNull(requests, "requests");
         this.access = Objects.requireNonNull(access, "access");
+        this.handoffEvidence = Objects.requireNonNull(handoffEvidence, "handoff evidence");
         if (window.isNegative() || window.isZero() || window.compareTo(MAX_WINDOW) > 0) {
             throw new IllegalArgumentException("Release window is outside the allowed range.");
         }
@@ -33,6 +46,12 @@ public final class GuardedRelease {
     }
 
     public enum Outcome { HANDED_OFF, WITHHELD, FRESHNESS_LOST, BUFFER_UNAVAILABLE, BUDGET_EXCEEDED }
+
+    public record Context(PolicyGuard guard, Admission admission) { }
+
+    public record Payload(byte[] bytes, Optional<ReleaseEvidence.Correlation> correlation) { }
+
+    public record Prepared(Payload payload, Predicate<Context> remainsAuthorized) { }
 
     /**
      * The trusted loader resolves a verified operation key on the current command connection.
@@ -44,76 +63,124 @@ public final class GuardedRelease {
     public Outcome handoffCreate(AuthenticatedActor actor, RequestType submittedType,
                                  BooleanSupplier fresh, Supplier<Optional<OperationReceipt>> loadCommitted,
                                  Function<OperationReceipt, byte[]> prepareAndEncode, ReleaseBuffer buffer) {
+        return handoffCreate(actor, submittedType, ignored -> { }, fresh, ignored -> loadCommitted.get(),
+                (admission, receipt) -> new Payload(prepareAndEncode.apply(receipt), Optional.empty()), buffer);
+    }
+
+    Outcome handoffCreate(AuthenticatedActor actor, RequestType submittedType, WriterLineage lineage,
+                          BooleanSupplier fresh, Function<Admission, Optional<OperationReceipt>> loadCommitted,
+                          BiFunction<Admission, OperationReceipt, Payload> prepareAndEncode, ReleaseBuffer buffer) {
+        return handoff(actor.organization(), guard -> {
+            var admission = access.requireCreate(actor, submittedType, guard);
+            if (!access.usesEffectiveScope()) {
+                lineage.requireCurrent(admission);
+            }
+            return admission;
+        }, fresh, context -> loadCommitted.apply(context.admission())
+                .filter(receipt -> isScopedCreate(receipt, actor))
+                .flatMap(receipt -> requests.find(actor.organization(), receipt.resultRef())
+                        .filter(target -> authorized(actor, context.guard(), receipt, target))
+                        .map(target -> new Prepared(prepareAndEncode.apply(context.admission(), receipt),
+                                current -> authorized(actor, current.guard(), receipt, target)))), buffer);
+    }
+
+    /**
+     * Authorize the requested operation under the owned guard before loading protected data.
+     * The initial projection and final authorization run on the same guarded connection.
+     */
+    public Outcome handoff(OrganizationId organization, Function<PolicyGuard, Admission> authorize,
+                           BooleanSupplier fresh, Function<Context, Optional<Prepared>> prepare, ReleaseBuffer buffer) {
         long started = System.nanoTime();
         BooleanSupplier withinBudget = () -> System.nanoTime() - started < budgetNanos;
-        var pending = new AtomicReference<ReleaseBuffer.Pending>();
+        var pending = new AtomicReference<Accepted>();
         try {
-            Outcome outcome = transactions.runGuardedRelease(() -> stageCreate(actor, submittedType, fresh, loadCommitted,
-                    prepareAndEncode, buffer, withinBudget, pending));
+            Outcome outcome = transactions.runGuardedRelease(() -> stage(
+                    organization, authorize, fresh, prepare, buffer, withinBudget, pending));
             if (outcome == Outcome.HANDED_OFF) {
-                buffer.complete(pending.get());
+                var accepted = pending.get();
+                buffer.complete(accepted.slot());
+                accepted.correlation().ifPresent(correlation -> {
+                    try {
+                        handoffEvidence.record(correlation);
+                    } catch (AuthorityUnavailableException unavailable) {
+                        // The slot is already drainable. Unretained evidence leaves handoff unknown.
+                    }
+                });
             }
             return outcome;
         } finally {
             // On failure, only this call's pending slot can be cancelled.
-            Optional.ofNullable(pending.get()).ifPresent(buffer::discard);
+            Optional.ofNullable(pending.get()).ifPresent(accepted -> buffer.discard(accepted.slot()));
         }
     }
 
-    private Outcome stageCreate(AuthenticatedActor actor, RequestType submittedType,
-                                BooleanSupplier fresh, Supplier<Optional<OperationReceipt>> loadCommitted,
-                                Function<OperationReceipt, byte[]> prepareAndEncode, ReleaseBuffer buffer,
-                                BooleanSupplier withinBudget, AtomicReference<ReleaseBuffer.Pending> pending) {
-        var guard = guards.lockShared(actor.organization()).orElseThrow(AuthorityUnavailableException::new);
-        access.requireCreate(actor, submittedType, guard);
+    private Outcome stage(OrganizationId organization, Function<PolicyGuard, Admission> authorize,
+                          BooleanSupplier fresh, Function<Context, Optional<Prepared>> prepare, ReleaseBuffer buffer,
+                          BooleanSupplier withinBudget, AtomicReference<Accepted> pending) {
+        var guard = guards.lockShared(organization).orElseThrow(AuthorityUnavailableException::new);
+        var admission = authorize.apply(guard);
+        requireScope(guard, admission);
         if (!fresh.getAsBoolean()) {
             return Outcome.FRESHNESS_LOST;
         }
         if (!withinBudget.getAsBoolean()) {
             return Outcome.BUDGET_EXCEEDED;
         }
-        var receipt = loadCommitted.get().filter(value -> isScopedCreate(value, actor));
-        var target = receipt.flatMap(original -> requests.find(actor.organization(), original.resultRef()))
-                .filter(request -> request.state() != RequestState.DELETED
-                        && access.permitsCreateResult(actor, guard, request));
-        Outcome candidate = Outcome.WITHHELD;
-        byte[] payload = null;
-        if (target.isPresent()) {
-            if (withinBudget.getAsBoolean()) {
-                payload = prepareAndEncode.apply(receipt.orElseThrow());
-                candidate = buffer.canOffer(payload) ? Outcome.HANDED_OFF : Outcome.BUFFER_UNAVAILABLE;
-            } else {
-                candidate = Outcome.BUDGET_EXCEEDED;
-            }
-        }
+        var candidate = prepare.apply(new Context(guard, admission));
 
-        access.requireCreate(actor, submittedType, guard);
-        if (target.isPresent() && !access.permitsCreateResult(actor, guard, target.get())) {
-            candidate = Outcome.WITHHELD;
+        boolean authorized = candidate.filter(value -> value.remainsAuthorized().test(new Context(guard, admission)))
+                .isPresent();
+        if (!admission.equals(authorize.apply(guard))) {
+            throw new AuthorityUnavailableException();
         }
         // Preparation and proof use independent connections. A lost local session has lost its guard.
-        if (guards.find(actor.organization()).filter(guard::equals).isEmpty()) {
+        if (guards.find(organization).filter(guard::equals).isEmpty()) {
             throw new AuthorityUnavailableException();
         }
         if (!fresh.getAsBoolean()) {
             return Outcome.FRESHNESS_LOST;
         }
-        if (candidate != Outcome.HANDED_OFF) {
-            return candidate;
+        if (!authorized) {
+            return Outcome.WITHHELD;
         }
-        ReleaseBuffer.Pending handoff = buffer.offer(payload, withinBudget);
+        if (!withinBudget.getAsBoolean()) {
+            return Outcome.BUDGET_EXCEEDED;
+        }
+        var payload = candidate.orElseThrow().payload();
+        if (payload.correlation().filter(value -> !value.organization().equals(organization)).isPresent()) {
+            throw new AuthorityUnavailableException();
+        }
+        var expired = new AtomicBoolean();
+        ReleaseBuffer.Pending handoff = buffer.offer(payload.bytes(), () -> {
+            expired.set(!fresh.getAsBoolean());
+            return !expired.get() && withinBudget.getAsBoolean();
+        });
         if (handoff == null) {
-            if (!fresh.getAsBoolean()) {
+            if (expired.get() || !fresh.getAsBoolean()) {
                 return Outcome.FRESHNESS_LOST;
             }
             return withinBudget.getAsBoolean() ? Outcome.BUFFER_UNAVAILABLE : Outcome.BUDGET_EXCEEDED;
         }
-        pending.set(handoff);
+        pending.set(new Accepted(handoff, payload.correlation()));
         return Outcome.HANDED_OFF;
+    }
+
+    private static void requireScope(PolicyGuard guard, Admission admission) {
+        if (!guard.organization().equals(admission.genesis().organization())) {
+            throw new AuthorityUnavailableException();
+        }
+    }
+
+    private boolean authorized(AuthenticatedActor actor, PolicyGuard guard, OperationReceipt receipt, Request target) {
+        return target.organization().equals(actor.organization()) && target.ref().equals(receipt.resultRef())
+                && target.creationOrder().epoch() == receipt.keyGeneration() && target.state() != RequestState.DELETED
+                && access.permitsCreateResult(actor, guard, target);
     }
 
     private static boolean isScopedCreate(OperationReceipt receipt, AuthenticatedActor actor) {
         return receipt.action() == Action.CREATE && receipt.key().organization().equals(actor.organization())
                 && receipt.key().issuer().equals(actor.issuer()) && receipt.key().principal().equals(actor.principal());
     }
+
+    private record Accepted(ReleaseBuffer.Pending slot, Optional<ReleaseEvidence.Correlation> correlation) { }
 }

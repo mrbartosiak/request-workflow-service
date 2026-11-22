@@ -9,11 +9,12 @@ import com.company.requests.domain.RequestBody;
 import com.company.requests.domain.TransitionFact;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 
-/** First-slice Create and exact retry on one certified, immutable writer generation. */
+/** Create and exact retry under the certified writer and current organization policy. */
 public final class CreateCommand {
     private static final long BUDGET_NANOS = Duration.ofMillis(2400).toNanos();
     private static final byte CONFLICT = 0;
@@ -31,11 +32,20 @@ public final class CreateCommand {
     private final IntentDigest digests;
     private final ReleasePreparation preparation;
     private final GuardedRelease release;
+    private final OriginalReceiptProof originalReceipts;
 
     public CreateCommand(TransactionRunner transactions, PolicyGuardStore guards, RequestStore requests,
                          ReceiptStore receipts, CreateStore creates, CurrentAccess access, WriterLineage lineage,
                          IdentityAuthority identities, OperationKeyIssuer keys, IntentDigest digests,
                          ReleasePreparation preparation, GuardedRelease release) {
+        this(transactions, guards, requests, receipts, creates, access, lineage, identities, keys, digests,
+                preparation, release, OriginalReceiptProof.unavailable());
+    }
+
+    public CreateCommand(TransactionRunner transactions, PolicyGuardStore guards, RequestStore requests,
+                         ReceiptStore receipts, CreateStore creates, CurrentAccess access, WriterLineage lineage,
+                         IdentityAuthority identities, OperationKeyIssuer keys, IntentDigest digests,
+                         ReleasePreparation preparation, GuardedRelease release, OriginalReceiptProof originalReceipts) {
         this.transactions = transactions;
         this.guards = guards;
         this.requests = requests;
@@ -48,6 +58,7 @@ public final class CreateCommand {
         this.digests = digests;
         this.preparation = preparation;
         this.release = release;
+        this.originalReceipts = Objects.requireNonNull(originalReceipts, "earlier receipt proof");
     }
 
     public sealed interface Result permits Rejection, Released { }
@@ -74,6 +85,13 @@ public final class CreateCommand {
 
     public Result execute(AuthenticatedActor actor, String signedKey, IntentDigest.Create intent,
                           Function<OperationReceipt, byte[]> encode) {
+        return execute(actor, signedKey, intent, encode, new ReleaseBuffer(ReleaseBuffer.MAX_BYTES));
+    }
+
+    public Result execute(AuthenticatedActor actor, String signedKey, IntentDigest.Create intent,
+                          Function<OperationReceipt, byte[]> encode, ReleaseBuffer buffer) {
+        Objects.requireNonNull(encode, "result encoder");
+        Objects.requireNonNull(buffer, "release buffer");
         long started = System.nanoTime();
         try {
             var immutableAdmission = access.usesEffectiveScope() ? null : access.requireCreate(actor, intent.type());
@@ -98,7 +116,7 @@ public final class CreateCommand {
                     // The next phase can prove and release the effect. It never executes Create again.
                 }
             }
-            return resolve(actor, key, intent, verified.admission(), encode, started);
+            return resolve(actor, key, intent, encode, buffer, started);
         } catch (CommitOutcomeUnknownException | TransactionBusyException | TransactionResourceUnavailableException
                  | ExecutionWindowClosed unavailable) {
             return Rejection.OUTCOME_UNKNOWN;
@@ -145,49 +163,45 @@ public final class CreateCommand {
     }
 
     private Result resolve(AuthenticatedActor actor, VerifiedKey key, IntentDigest.Create intent,
-                           Admission admission, Function<OperationReceipt, byte[]> encode,
+                           Function<OperationReceipt, byte[]> encode, ReleaseBuffer buffer,
                            long started) {
-        var buffer = new ReleaseBuffer(ReleaseBuffer.MAX_BYTES);
-        boolean past = key.generation() < admission.writer().generation();
+        boolean past = key.eligibility() == Eligibility.PAST_GENERATION_LOOKUP_ONLY;
         var foundTrusted = new boolean[1];
-        GuardedRelease.Outcome outcome = release.handoffCreate(actor, intent.type(), () -> {
-            // The mutable access gate verifies the bound writer at each guarded authorization check.
-            if (!access.usesEffectiveScope()) {
-                lineage.requireCurrent(admission);
-            }
+        GuardedRelease.Outcome outcome = release.handoffCreate(actor, intent.type(), lineage, () -> {
             if (!keys.isFresh(key)) {
                 return false;
             }
             requireBudget(started);
             return true;
-        }, () -> {
-            var receipt = receipts.find(key.receiptKey()).filter(value -> value.key().equals(key.receiptKey())
-                    && value.keyGeneration() == key.generation() && value.expiresAt().equals(key.expiresAt()));
-            // This slice only certifies its live writer. An earlier generation needs restored receipt proof.
-            if (past) {
-                return Optional.empty();
+        }, current -> {
+            long generation = current.writer().generation();
+            if (key.generation() > generation || past != (key.generation() < generation)) {
+                throw new AuthorityUnavailableException();
             }
+            var receipt = (past ? findOriginal(current, key) : receipts.find(key.receiptKey()))
+                    .filter(value -> value.action() == Action.CREATE && value.key().equals(key.receiptKey())
+                            && value.keyGeneration() == key.generation() && value.expiresAt().equals(key.expiresAt()));
             foundTrusted[0] = receipt.isPresent();
             return receipt;
-        }, original -> {
+        }, (current, original) -> {
             if (!digests.matches(original.intentDigest(), intent)) {
-                return new byte[]{CONFLICT};
+                return new GuardedRelease.Payload(new byte[]{CONFLICT}, Optional.empty());
             }
             byte[] envelope = encode.apply(original);
             if (envelope.length == 0 || envelope.length >= ReleaseBuffer.MAX_BYTES) {
-                return new byte[0];
+                return new GuardedRelease.Payload(new byte[0], Optional.empty());
             }
+            Optional<ReleaseEvidence.Correlation> correlation;
             try {
-                preparation.append(admission, original);
+                correlation = preparation.prepare(current, original);
             } catch (AuthorityUnavailableException failure) {
-                // Defer normally if current authority was lost. Unavailable preparation alone withholds delivery.
-                lineage.requireCurrent(admission);
-                return new byte[0];
+                // The disclosure gate rechecks current authority before classifying this withheld delivery.
+                return new GuardedRelease.Payload(new byte[0], Optional.empty());
             }
             byte[] payload = new byte[envelope.length + 1];
             payload[0] = SUCCESS;
             System.arraycopy(envelope, 0, payload, 1, envelope.length);
-            return payload;
+            return new GuardedRelease.Payload(payload, correlation);
         }, buffer);
         return switch (outcome) {
             case HANDED_OFF -> {
@@ -204,6 +218,14 @@ public final class CreateCommand {
             }
             case BUFFER_UNAVAILABLE, BUDGET_EXCEEDED -> Rejection.OUTCOME_UNKNOWN;
         };
+    }
+
+    private Optional<OperationReceipt> findOriginal(Admission current, VerifiedKey key) {
+        try {
+            return originalReceipts.find(current, key);
+        } catch (AuthorityUnavailableException unproved) {
+            return Optional.empty();
+        }
     }
 
     private void requireEffectWindow(VerifiedKey key, AuthenticatedActor actor, Admission admission,

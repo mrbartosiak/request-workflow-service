@@ -227,3 +227,36 @@ For a separately provisioned B08 scope, start the same application with the reso
 ~~~
 
 Write ten UTF-8 lines to stdin in order. Supply the workflow and proof runtime role passwords, writer UUID, writer generation, two unpadded base64url-encoded 32-byte secrets (signing and intent), then the owner, owner-alias, key-only and no-issue bearer values. Keep the pipe open while making requests and close it to stop the application. The app prints its `READY` loopback endpoint. Use a local client to send `POST /operation-keys` with the owner bearer, then `POST /requests` with that bearer, the returned `Idempotency-Key` and an exact JSON Create body. Treat the bearer and key as private inputs to the client.
+
+## B12 guarded replay and independent release evidence
+
+Run the fixture with the qualified Windows toolchain and a fresh scratch directory. Reserve 55480–55482 until the workflow, proof and isolated backup copy are stopped. The fixture executes the existing Create routes in the effective-access Spring MVC context against real PostgreSQL. It applies V005 after a legacy B08 preparation, injects trusted time and earlier receipt answers through private ports, and checks both orders of the PostgreSQL guard race. It verifies a physical backup copy and compares its receipt and result rows with the independent acknowledgment journal.
+
+Use the B32 launcher to build the packaged runtime and obtain its qualified classpath. Set `$workspace` to the main workspace and `$scratch` to a new directory under private run storage.
+
+~~~powershell
+& ./fixtures/postgresql/b32/Run-B32.ps1 -Action Build -Workspace $workspace -Scratch $scratch
+$manifest = Get-Content -Raw -LiteralPath (Join-Path $scratch 'prepared.json') | ConvertFrom-Json
+$phase = Join-Path $workspace 'tmp/phase5-development'
+$bin = Join-Path $phase 'b04-fixture/runtime/pgsql/bin'
+$jdk = Join-Path $phase 'b01-tools/temurin/jdk-25.0.5.1+2'
+$build = Join-Path $scratch 'b12-launcher'
+$runs = Join-Path $scratch 'runs'
+$springTest = Join-Path $scratch 'repository/org/springframework/spring-test/7.0.11/spring-test-7.0.11.jar'
+$classpath = "$($manifest.runtime);$springTest"
+$runId = 'b12-local-01'
+
+New-Item -ItemType Directory -Path $build | Out-Null
+& (Join-Path $jdk 'bin/javac.exe') -encoding UTF-8 -classpath $classpath -d $build `
+    fixtures/postgresql/QualifyPostgresql.java fixtures/postgresql/B08MvcSession.java `
+    fixtures/postgresql/B10FixtureSources.java fixtures/postgresql/B10Postgresql.java fixtures/postgresql/B12Postgresql.java
+if ($LASTEXITCODE -ne 0) { throw 'B12 fixture compilation failed' }
+& (Join-Path $jdk 'bin/java.exe') -cp "$build;$classpath" B12Postgresql run $bin $runs $runId
+if ($LASTEXITCODE -ne 0) { throw 'B12 PostgreSQL fixture failed' }
+~~~
+
+After an interruption, use `B12Postgresql cleanup` with the same classpath, binary directory, scratch path and run ID to verify the run marker and stop the owned processes.
+
+To enable the upgraded synthetic application composition, supply `SyntheticCreateConfiguration.GuardedReplay` in `SyntheticEffectiveAccessConfiguration.Settings`. Apply `JdbcAuthorityProvisioning.migrateReleaseEvidence` as the independent proof owner and authorize a separate proof-database login for each preparation, handoff, client receipt and read input. Grant each login schema usage and execute on its matching V005 function. The B12 fixture wires the preparation and handoff ports into the normal Spring MVC controller and verifies acknowledgment through its separate synthetic client role. The B08 standalone launcher uses its original settings and wire contract.
+
+The earlier-generation fixture port supplies a synthetic trusted receipt or a proof miss. A real implementation of `OriginalReceiptProof` needs authoritative original commit and retention evidence. The default port fences earlier keys. The physical backup verifies effect presence for loss classification and remains outside the shipping proof path.

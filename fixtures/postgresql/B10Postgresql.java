@@ -64,26 +64,27 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.UnaryOperator;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /** Native oracle for the opt-in effective access profile. */
 public final class B10Postgresql {
-    private static final OrganizationId ORG = new OrganizationId("b10-local");
-    private static final OrganizationId OTHER = new OrganizationId("b10-other");
-    private static final AuthenticatedActor OWNER = actor(ORG, "original", "person-origin");
+    static final OrganizationId ORG = new OrganizationId("b10-local");
+    static final OrganizationId OTHER = new OrganizationId("b10-other");
+    static final AuthenticatedActor OWNER = actor(ORG, "original", "person-origin");
     private static final AuthenticatedActor ASSIGNEE = actor(ORG, "assignee", "person-assignee-東京");
-    private static final AuthenticatedActor OPERATOR = actor(ORG, "scope-operator", "person-operator");
+    static final AuthenticatedActor OPERATOR = actor(ORG, "scope-operator", "person-operator");
     private static final AuthenticatedActor ASSIGNER = actor(ORG, "assignment-operator", "person-assigner");
     private static final AuthenticatedActor FOREIGN = actor(OTHER, "original", "person-origin");
-    private static final RequestType TYPE = RequestType.HR_TICKET;
+    static final RequestType TYPE = RequestType.HR_TICKET;
     private static final RequestType BUG = RequestType.BUG_REPORT;
     private static final IntentDigest.Create INTENT = new IntentDigest.Create(TYPE, "test name", "test body");
     private static final IntentDigest.Create BUG_INTENT = new IntentDigest.Create(BUG, "race name", "race body");
     private static final Set<Field> ALL = Set.of(Field.values());
     private static final Set<Field> RESULT = Set.of(Field.REF, Field.ACTION, Field.RESULT_REVISION, Field.STATE);
     private static final Set<Field> MASK = Set.of(Field.REF, Field.ACTION, Field.RESULT_REVISION, Field.NAME);
-    private static final WriterEpoch WRITER = new WriterEpoch(UUID.randomUUID(), 5);
+    static final WriterEpoch WRITER = new WriterEpoch(UUID.randomUUID(), 5);
     private static final SyntheticScopePolicy POLICY = new SyntheticScopePolicy(ORG, 1, List.of(
             new SyntheticScopePolicy.Grant(OWNER, true, Set.of(TYPE, BUG), Set.of(TYPE, BUG)),
             new SyntheticScopePolicy.Grant(ASSIGNEE, true, Set.of(TYPE), Set.of(TYPE)),
@@ -117,11 +118,18 @@ public final class B10Postgresql {
     private B10Postgresql(QualifyPostgresql.Connections workflow, QualifyPostgresql.Connections proof,
                           QualifyPostgresql.SqlConnection projector, QualifyPostgresql.SqlConnection resolver,
                           QualifyPostgresql.SqlConnection createProof, B10FixtureSources sources) throws SQLException {
+        this(workflow, proof, projector, resolver, createProof, sources, UnaryOperator.identity());
+    }
+
+    B10Postgresql(QualifyPostgresql.Connections workflow, QualifyPostgresql.Connections proof,
+                  QualifyPostgresql.SqlConnection projector, QualifyPostgresql.SqlConnection resolver,
+                  QualifyPostgresql.SqlConnection createProof, B10FixtureSources sources,
+                  UnaryOperator<Connection> decorate) throws SQLException {
         workflowAdmin = sources.source(workflow.migration());
         var proofAdmin = sources.source(proof.migration());
         workflowOwner = new JdbcTemplate(workflowAdmin);
         proofOwner = new JdbcTemplate(proofAdmin);
-        command = sources.source(workflow.runtime(), connection -> inject(connection, commandCut));
+        command = sources.source(workflow.runtime(), connection -> decorate.apply(inject(connection, commandCut)));
         commandTx = JdbcTransactionRunner.forCreate(command);
         guards = new JdbcWorkflowRecords(command);
         var preparation = sources.source(proof.runtime(), connection -> inject(connection, prepareCut));
@@ -150,6 +158,18 @@ public final class B10Postgresql {
                         && !globalPrivilege(resolverSource, ATTEMPT, "UPDATE"),
                 "proof roles crossed the preparation, creation or resolution boundaries");
         System.out.println("PASS separate command, observer, projector, Create proof, journal and resolver role grants");
+    }
+
+    SyntheticEffectiveAccessConfiguration.Settings settings() {
+        return profileSettings;
+    }
+
+    Components components() {
+        return profile;
+    }
+
+    void pauseBeforeScopeWitness(CountDownLatch entered, CountDownLatch resume) {
+        commandCut.set(new Cut(WITNESS, CutAt.BEFORE_EXECUTE, entered, resume));
     }
 
     public static void main(String[] args) {
@@ -618,7 +638,7 @@ public final class B10Postgresql {
                 : "PASS witness insertion failure rolled back the local grant and version; audited rollback reopened");
     }
 
-    private void confirm(PendingConfirmation result) {
+    void confirm(PendingConfirmation result) {
         require(profile.resolver().resolve(confirmer, ADMISSION, result.attemptId(), Operation.CONFIRM) == State.COMMITTED,
                 "audited confirmation failed");
         var checkpoint = journal.confirmedAuthority().current(ADMISSION);
@@ -697,7 +717,7 @@ public final class B10Postgresql {
                 "SELECT has_table_privilege(?, ?)", Boolean.class, table, privilege));
     }
 
-    private void requireWaiting(String lockClause) throws SQLException, InterruptedException {
+    void requireWaiting(String lockClause) throws SQLException, InterruptedException {
         requireWaiting("%FROM requests.policy_guard%" + lockClause + "%", lockClause);
     }
 

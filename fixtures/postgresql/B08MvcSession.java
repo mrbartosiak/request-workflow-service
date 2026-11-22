@@ -2,6 +2,7 @@ import com.company.requests.adapter.http.SyntheticActorResolver;
 import com.company.requests.bootstrap.B08SyntheticScope;
 import com.company.requests.bootstrap.SyntheticCreateConfiguration;
 import com.company.requests.bootstrap.SyntheticCreateConfiguration.Settings;
+import com.company.requests.bootstrap.SyntheticEffectiveAccessConfiguration;
 import com.company.requests.application.AuthenticatedActor;
 import com.company.requests.application.OperationSecrets;
 import com.company.requests.application.SyntheticScopePolicy;
@@ -50,12 +51,19 @@ final class B08MvcSession implements AutoCloseable {
     private final MockMvc mvc;
 
     B08MvcSession(DataSource workflow, DataSource proof, TrustedTime clock, Parameters parameters) {
-        var settings = new Settings(workflow, proof, POLICY, parameters.writer(), parameters.actors(),
-                clock, parameters.secrets());
+        this(new Settings(workflow, proof, POLICY, parameters.writer(), parameters.actors(),
+                clock, parameters.secrets()), SyntheticCreateConfiguration.class);
+    }
+
+    B08MvcSession(SyntheticEffectiveAccessConfiguration.Settings settings) {
+        this(settings, SyntheticEffectiveAccessConfiguration.class);
+    }
+
+    private B08MvcSession(Object settings, Class<?> configuration) {
         context = new AnnotationConfigWebApplicationContext();
         context.setServletContext(new MockServletContext());
         context.addBeanFactoryPostProcessor(factory -> factory.registerSingleton("b08SyntheticSettings", settings));
-        context.register(SyntheticCreateConfiguration.class);
+        context.register(configuration);
         context.refresh();
         mvc = MockMvcBuilders.webAppContextSetup(context).build();
     }

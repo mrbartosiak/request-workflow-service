@@ -18,7 +18,7 @@ import javax.sql.DataSource;
 public final class JdbcAuthorityProvisioning {
     private static final List<String> MIGRATIONS = List.of(
             "V001__synthetic_authority.sql", "V002__create_proof.sql", "V003__scope_authority_journal.sql",
-            "V004__scope_authority_resolver.sql");
+            "V004__scope_authority_resolver.sql", "V005__release_evidence.sql");
     private final ProofTransactions transactions;
 
     public JdbcAuthorityProvisioning(DataSource independentMigrationDataSource) {
@@ -39,7 +39,45 @@ public final class JdbcAuthorityProvisioning {
      * whose already closed aborts were established by certified original-lineage rollback.
      */
     public void migrateScopeResolver() {
-        migrateThrough(MIGRATIONS.size());
+        migrateThrough(4);
+    }
+
+    /** Enables separately authorized release evidence while retaining the original preparation entries. */
+    public void migrateReleaseEvidence() {
+        migrateThrough(5);
+    }
+
+    /** Bind one actual database login to one release evidence input and an explicit certified scope. */
+    public void authorizeReleaseEvidence(String loginRole, OrganizationId scope, JdbcReleaseEvidence.Input input) {
+        transactions.run(false, connection -> {
+            try (var principal = connection.prepareStatement("""
+                    INSERT INTO request_authority.release_evidence_principal (login_role, input)
+                    SELECT rolname, ? FROM pg_catalog.pg_roles WHERE rolname = ? AND rolcanlogin
+                    ON CONFLICT (login_role) DO NOTHING
+                    """);
+                 var grant = connection.prepareStatement("""
+                    WITH allowed AS (
+                        SELECT login_role FROM request_authority.release_evidence_principal
+                        WHERE login_role = ? AND input = ?
+                    ), applied AS (
+                        INSERT INTO request_authority.release_evidence_scope (login_role, organization)
+                        SELECT login_role, ? FROM allowed ON CONFLICT DO NOTHING
+                    ) SELECT EXISTS (SELECT 1 FROM allowed)
+                    """)) {
+                principal.setString(1, input.name());
+                principal.setString(2, loginRole);
+                principal.executeUpdate();
+                grant.setString(1, loginRole);
+                grant.setString(2, input.name());
+                grant.setString(3, scope.value());
+                try (var rows = grant.executeQuery()) {
+                    if (!rows.next() || !rows.getBoolean(1)) {
+                        throw new AuthorityUnavailableException();
+                    }
+                }
+            }
+            return null;
+        });
     }
 
     /** Configure one synthetic operator decision for one certified scope using an independent 256-bit token. */
