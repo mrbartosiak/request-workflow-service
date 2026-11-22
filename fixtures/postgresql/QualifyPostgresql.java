@@ -171,7 +171,17 @@ public final class QualifyPostgresql {
     }
 
     static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check) throws Exception {
-        require(List.of("b06", "b08").contains(ticket), "Unexpected dual-cluster fixture ticket");
+        workflowAndProof(args, ticket, check, null);
+    }
+
+    static void scopeProofAndRestore(String[] args, ScopeProofCheck check) throws Exception {
+        workflowAndProof(args, "b09", null, check);
+    }
+
+    private static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check,
+                                         ScopeProofCheck scopeCheck) throws Exception {
+        boolean withRestore = scopeCheck != null;
+        require(List.of("b06", "b08", "b09").contains(ticket), "Unexpected dual-cluster fixture ticket");
         String label = ticket.toUpperCase(Locale.ROOT);
         require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),
                 "Usage: run|cleanup BIN RUNS_DIRECTORY " + ticket + "-RUN_ID");
@@ -186,30 +196,34 @@ public final class QualifyPostgresql {
         if (args[0].equals("cleanup")) {
             require(run.equals(run.toRealPath()) && owner.equals(owner.toRealPath())
                     && Files.readString(owner).equals(args[3]), "Cleanup requires the original " + label + " run directory");
-            probe.dualCleanup();
+            probe.dualCleanup(withRestore);
             return;
         }
         requirePortFree(probe.workflow.port);
         requirePortFree(probe.proof.port);
+        if (withRestore) {
+            requirePortFree(probe.restore.port);
+        }
         Files.createDirectory(run);
         Files.writeString(owner, args[3], StandardOpenOption.CREATE_NEW);
         System.out.printf("%s run=%s Java=%s UTC start=%s%n", label, run, Runtime.version(), Instant.now());
         try {
-            probe.runDualCheck(check);
+            probe.runDualCheck(withRestore ? (workflow, proof) ->
+                    scopeCheck.run(workflow, proof, probe::restoreWorkflowSnapshot) : check, withRestore);
         } catch (Exception | Error failure) {
             try {
-                probe.dualCleanup();
+                probe.dualCleanup(withRestore);
             } catch (Exception cleanupFailure) {
                 failure.addSuppressed(cleanupFailure);
             }
             throw failure;
         }
-        probe.dualCleanup();
+        probe.dualCleanup(withRestore);
         System.out.println("PASS " + label + " workflow/proof verification and teardown " + Instant.now());
     }
 
-    private void runDualCheck(WorkflowAndProofCheck check) throws Exception {
-        initialize(workflow, workflowWriter, workflowObserver, null);
+    private void runDualCheck(WorkflowAndProofCheck check, boolean withRestore) throws Exception {
+        initialize(workflow, workflowWriter, workflowObserver, withRestore ? workflowBackup : null);
         initialize(proof, proofWriter, proofObserver, null);
         inspect(workflow, workflowWriter, workflowObserver);
         inspect(proof, proofWriter, proofObserver);
@@ -221,6 +235,24 @@ public final class QualifyPostgresql {
         System.out.printf("PASS independent system identifiers workflow=%s proof=%s%n", workflowId, proofId);
         check.run(connections(workflow, workflowWriter, workflowObserver, workflowId),
                 connections(proof, proofWriter, proofObserver, proofId));
+    }
+
+    private SqlConnection restoreWorkflowSnapshot() throws Exception {
+        Path backup = run.resolve("scope-workflow-backup");
+        NativeResult baseBackup = nativeCommand("pg_basebackup", 75, workflowBackup.password,
+                "-h", HOST, "-p", "" + workflow.port, "-U", workflowBackup.name, "--no-password",
+                "--pgdata=" + backup, "--format=plain", "--wal-method=stream", "--checkpoint=fast",
+                "--manifest-checksums=SHA256");
+        NativeResult verified = nativeCommand("pg_verifybackup", 45, null, backup.toString());
+        require(verified.read().contains("backup successfully verified"), "Missing scope backup verification result");
+        copyBackup(backup, restore.data);
+        Files.writeString(restore.data.resolve("postgresql.conf"), "\nport = " + restore.port + "\n",
+                StandardOpenOption.APPEND);
+        start(restore);
+        require(systemId(workflow).equals(systemId(restore)), "Restored scope must preserve the workflow system ID");
+        System.out.printf("PASS same-system-ID physical workflow backup and isolated restore (%s, %s)%n",
+                baseBackup.log.getFileName(), verified.log.getFileName());
+        return () -> connect(restore, workflowObserver);
     }
 
     private Connections connections(Cluster cluster, Role writer, Role observer, String systemId) {
@@ -235,12 +267,22 @@ public final class QualifyPostgresql {
         require(expectedId.equals(systemId(cluster)), "Restart changed the fixture system identifier");
     }
 
-    private void dualCleanup() throws Exception {
-        cleanup(List.of(proof, workflow));
+    private void dualCleanup(boolean withRestore) throws Exception {
+        cleanup(withRestore ? List.of(restore, proof, workflow) : List.of(proof, workflow));
     }
 
     record Connections(SqlConnection migration, SqlConnection runtime, SqlConnection observer,
                        Restart restart, RuntimeLogin runtimeLogin) { }
+
+    @FunctionalInterface
+    interface ScopeProofCheck {
+        void run(Connections workflow, Connections proof, ScopeRestore restore) throws Exception;
+    }
+
+    @FunctionalInterface
+    interface ScopeRestore {
+        SqlConnection snapshot() throws Exception;
+    }
 
     record RuntimeLogin(int port, String database, String username, String password) {
         RuntimeLogin {

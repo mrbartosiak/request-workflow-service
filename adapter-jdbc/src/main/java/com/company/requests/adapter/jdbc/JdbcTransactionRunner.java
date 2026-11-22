@@ -2,10 +2,15 @@ package com.company.requests.adapter.jdbc;
 
 import com.company.requests.application.AuthorityUnavailableException;
 import com.company.requests.application.CommitOutcomeUnknownException;
+import com.company.requests.application.PolicyGuard;
+import com.company.requests.application.ScopeAuthorityChange.Attempt;
 import com.company.requests.application.TransactionBusyException;
 import com.company.requests.application.TransactionResourceUnavailableException;
 import com.company.requests.application.TransactionRunner;
+import com.company.requests.domain.OrganizationId;
 import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
@@ -137,14 +142,56 @@ public final class JdbcTransactionRunner implements TransactionRunner {
     }
 
     static void requireBoundConnection(DataSource dataSource) {
-        CommandConnection command = ACTIVE_COMMAND.get();
-        // Spring may also synchronize a connection opened on another data source during the callback.
-        if (command == null || command.dataSource() != dataSource
-                || !TransactionSynchronizationManager.isActualTransactionActive()
-                || TransactionSynchronizationManager.getResource(dataSource) != command.holder()) {
-            throw new IllegalStateException("Workflow records require a transaction on the command data source.");
+        requireCommand(dataSource);
+    }
+
+    static void rememberExclusiveGuard(DataSource dataSource, PolicyGuard guard) {
+        requireCommand(dataSource).exclusiveGuards.put(guard.organization(), guard);
+    }
+
+    static void requireExclusiveGuard(DataSource dataSource, PolicyGuard guard) {
+        if (!guard.equals(requireCommand(dataSource).exclusiveGuards.get(guard.organization()))) {
+            throw new IllegalStateException("Scope witnesses require this transaction's exclusive organization guard.");
         }
     }
 
-    private record CommandConnection(DataSource dataSource, ConnectionHolder holder) { }
+    static void rememberScopeAttempt(DataSource dataSource, Attempt attempt) {
+        var command = requireCommand(dataSource);
+        if (command.scopeAttempt != null) {
+            throw new IllegalStateException("A command transaction may begin only one scope attempt.");
+        }
+        command.scopeAttempt = attempt;
+    }
+
+    static void requireScopeAttempt(DataSource dataSource, Attempt attempt) {
+        var command = requireCommand(dataSource);
+        if (!attempt.equals(command.scopeAttempt)
+                || !command.exclusiveGuards.containsKey(attempt.admission().genesis().organization())) {
+            throw new IllegalStateException("Scope witnesses require this transaction's exact scope attempt.");
+        }
+    }
+
+    private static CommandConnection requireCommand(DataSource dataSource) {
+        CommandConnection command = ACTIVE_COMMAND.get();
+        // Spring may also synchronize a connection opened on another data source during the callback.
+        if (command == null || command.dataSource != dataSource
+                || !TransactionSynchronizationManager.isActualTransactionActive()
+                || TransactionSynchronizationManager.getResource(dataSource) != command.holder) {
+            throw new IllegalStateException("Workflow records require a transaction on the command data source.");
+        }
+        return command;
+    }
+
+    private static final class CommandConnection {
+        private final DataSource dataSource;
+        private final ConnectionHolder holder;
+        private final Map<OrganizationId, PolicyGuard> exclusiveGuards = new HashMap<>();
+        private Attempt scopeAttempt;
+
+        private CommandConnection(DataSource dataSource, ConnectionHolder holder) {
+            this.dataSource = dataSource;
+            this.holder = holder;
+        }
+
+    }
 }

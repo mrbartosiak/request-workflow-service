@@ -119,7 +119,9 @@ public final class JdbcWorkflowRecords implements RequestStore, PolicyGuardStore
 
     @Override
     public Optional<PolicyGuard> lockExclusive(OrganizationId organization) {
-        return lockGuard(organization, " FOR UPDATE");
+        var locked = lockGuard(organization, " FOR UPDATE");
+        locked.ifPresent(guard -> JdbcTransactionRunner.rememberExclusiveGuard(dataSource, guard));
+        return locked;
     }
 
     private Optional<PolicyGuard> lockGuard(OrganizationId organization, String lockClause) {

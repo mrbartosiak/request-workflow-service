@@ -12,7 +12,8 @@ import javax.sql.DataSource;
 
 /** Explicit setup for an immutable synthetic proof slice, using the independent schema owner. */
 public final class JdbcAuthorityProvisioning {
-    private static final List<String> MIGRATIONS = List.of("V001__synthetic_authority.sql", "V002__create_proof.sql");
+    private static final List<String> MIGRATIONS = List.of(
+            "V001__synthetic_authority.sql", "V002__create_proof.sql", "V003__scope_authority_journal.sql");
     private final ProofTransactions transactions;
 
     public JdbcAuthorityProvisioning(DataSource independentMigrationDataSource) {
@@ -20,7 +21,17 @@ public final class JdbcAuthorityProvisioning {
     }
 
     public void migrate() {
-        List<String> sources = MIGRATIONS.stream().map(JdbcAuthorityProvisioning::migrationSource).toList();
+        migrateThrough(2);
+    }
+
+    /** Explicit qualification for deployments with effective scope proof. */
+    public void migrateScopeJournal() {
+        migrateThrough(MIGRATIONS.size());
+    }
+
+    private void migrateThrough(int target) {
+        List<String> sources = MIGRATIONS.subList(0, target).stream()
+                .map(JdbcAuthorityProvisioning::migrationSource).toList();
         transactions.run(false, connection -> {
             try (var statement = connection.createStatement()) {
                 statement.execute("SELECT pg_advisory_xact_lock(1919250805, 2)");
@@ -37,7 +48,7 @@ public final class JdbcAuthorityProvisioning {
                         applied.add(rows.getInt(1));
                     }
                 }
-                if (applied.size() > sources.size()) {
+                if (applied.size() > MIGRATIONS.size()) {
                     throw new AuthorityUnavailableException();
                 }
                 for (int index = 0; index < applied.size(); index++) {
@@ -59,6 +70,25 @@ public final class JdbcAuthorityProvisioning {
                 }
                 return null;
             }
+        });
+    }
+
+    /** Install the initial high-water for a scope certified after V003. */
+    public void initializeScopeJournal(Genesis genesis) {
+        transactions.run(false, connection -> {
+            try (var insert = connection.prepareStatement("""
+                    INSERT INTO request_authority.scope_journal_head (organization, last_sequence)
+                    SELECT organization, 0 FROM request_authority.scope_genesis
+                    WHERE organization = ? AND policy_version = ? AND policy_digest = ?
+                    """)) {
+                insert.setString(1, genesis.organization().value());
+                insert.setLong(2, genesis.policyVersion());
+                insert.setString(3, genesis.policyDigest());
+                if (insert.executeUpdate() != 1) {
+                    throw new AuthorityUnavailableException();
+                }
+            }
+            return null;
         });
     }
 

@@ -11,7 +11,8 @@ import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 public final class JdbcWorkflowMigrations {
     private static final List<String> SCRIPTS = List.of(
             "db/workflow/V001__policy_guard.sql", "db/workflow/V002__local_records.sql",
-            "db/workflow/V003__create_claim_and_assignment.sql");
+            "db/workflow/V003__create_claim_and_assignment.sql",
+            "db/workflow/V004__scope_authority_witness.sql");
 
     private final JdbcTransactionRunner runner;
     private final JdbcTemplate jdbc;
@@ -22,6 +23,11 @@ public final class JdbcWorkflowMigrations {
     }
 
     public void migrate() {
+        migrateThrough(3);
+    }
+
+    /** Explicit qualification for deployments with effective scope proof. */
+    public void migrateScopeWitnesses() {
         migrateThrough(SCRIPTS.size());
     }
 
