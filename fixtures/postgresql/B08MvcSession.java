@@ -1,15 +1,13 @@
 import com.company.requests.adapter.http.SyntheticActorResolver;
+import com.company.requests.bootstrap.B08SyntheticScope;
 import com.company.requests.bootstrap.SyntheticCreateConfiguration;
 import com.company.requests.bootstrap.SyntheticCreateConfiguration.Settings;
 import com.company.requests.application.AuthenticatedActor;
-import com.company.requests.application.AuthenticatedActor.Kind;
 import com.company.requests.application.OperationSecrets;
 import com.company.requests.application.SyntheticScopePolicy;
-import com.company.requests.application.SyntheticScopePolicy.Grant;
 import com.company.requests.application.TrustedTime;
 import com.company.requests.application.WriterEpoch;
 import com.company.requests.domain.OrganizationId;
-import com.company.requests.domain.PersonId;
 import com.company.requests.domain.RequestType;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -22,8 +20,6 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
@@ -40,19 +36,14 @@ import tools.jackson.databind.json.JsonMapper;
 
 /** Private synthetic MVC fixture, also usable in a short-lived independent app JVM. */
 final class B08MvcSession implements AutoCloseable {
-    static final OrganizationId ORG = new OrganizationId("b08-workflow-scope");
-    static final String ISSUER = "b08-synthetic-issuer";
-    static final String AUDIENCE = "b08-synthetic-audience";
+    static final OrganizationId ORG = B08SyntheticScope.ORGANIZATION;
+    static final String ISSUER = B08SyntheticScope.ISSUER;
+    static final String AUDIENCE = B08SyntheticScope.AUDIENCE;
     static final long GENERATION = 7;
-    static final RequestType VISIBLE = RequestType.HR_TICKET;
-    static final RequestType CONCEALED = RequestType.BUG_REPORT;
-    static final AuthenticatedActor OWNER = human("owner");
-    static final AuthenticatedActor KEY_ONLY = human("key-only");
-    static final AuthenticatedActor NO_ISSUE = human("no-issue");
-    static final SyntheticScopePolicy POLICY = new SyntheticScopePolicy(ORG, 1, List.of(
-            new Grant(OWNER, true, Set.of(VISIBLE, CONCEALED), Set.of(VISIBLE)),
-            new Grant(KEY_ONLY, true, Set.of(), Set.of()),
-            new Grant(NO_ISSUE, false, Set.of(VISIBLE), Set.of(VISIBLE))));
+    static final RequestType VISIBLE = B08SyntheticScope.VISIBLE;
+    static final RequestType CONCEALED = B08SyntheticScope.CONCEALED;
+    static final AuthenticatedActor OWNER = B08SyntheticScope.OWNER;
+    static final SyntheticScopePolicy POLICY = B08SyntheticScope.POLICY;
     private static final JsonMapper JSON = new JsonMapper();
 
     private final AnnotationConfigWebApplicationContext context;
@@ -180,11 +171,6 @@ final class B08MvcSession implements AutoCloseable {
         return new QualifyPostgresql.RuntimeLogin(input.readInt(), input.readUTF(), input.readUTF(), input.readUTF());
     }
 
-    private static AuthenticatedActor human(String principal) {
-        return new AuthenticatedActor(ISSUER, ORG, principal, Kind.HUMAN,
-                Optional.of(new PersonId("person-" + principal)));
-    }
-
     private static String header(String value) {
         return value == null ? "" : value;
     }
@@ -236,11 +222,7 @@ final class B08MvcSession implements AutoCloseable {
         }
 
         SyntheticActorResolver actors() {
-            return new SyntheticActorResolver(ISSUER, AUDIENCE, List.of(
-                    new SyntheticActorResolver.Binding("owner", bearers.get(0), OWNER),
-                    new SyntheticActorResolver.Binding("owner-alias", bearers.get(1), OWNER),
-                    new SyntheticActorResolver.Binding("limited", bearers.get(2), KEY_ONLY),
-                    new SyntheticActorResolver.Binding("no-issue", bearers.get(3), NO_ISSUE)));
+            return B08SyntheticScope.actors(bearers.get(0), bearers.get(1), bearers.get(2), bearers.get(3));
         }
 
         @Override

@@ -170,3 +170,60 @@ For an interrupted run, wait for the launcher to exit and repeat with `cleanup`,
 & $java --class-path "$build;$classpath" B06Postgresql cleanup $bin $runs $runId
 if ($LASTEXITCODE -ne 0) { throw 'B06 PostgreSQL cleanup failed' }
 ~~~
+
+## B08 listening HTTP and restart
+
+Use the owner-approved Tomcat 11.0.29 core and annotations artifacts in a private copy of the qualified Maven cache. Build with the `synthetic-http` profile. It adds the B08 listening entry point to the bootstrap JAR. Use the approved portable PostgreSQL installation and serialize runs that share ports 55480 and 55481. The standalone PostgreSQL fixture POM resolves the qualified JDBC runtime.
+
+Run from the candidate checkout. Adapt the variable setup in the B06 reproduction to a fresh B08 scratch root with its own cache, launcher directory and runs directory. Verify the private Tomcat cache entries against their Central SHA-256 sidecars first. Use a fresh B08 run ID.
+
+~~~powershell
+& $maven -o -B -C -ntp -s $settings -gs $settings "-Dmaven.repo.local=$cache" -Psynthetic-http clean verify
+if ($LASTEXITCODE -ne 0) { throw 'Offline reactor build failed' }
+
+$postgresClasspath = Join-Path $build 'postgres-classpath.txt'
+& $maven -o -B -C -ntp -s $settings -gs $settings "-Dmaven.repo.local=$cache" -f fixtures/postgresql/pom.xml `
+    org.apache.maven.plugins:maven-dependency-plugin:3.10.0:build-classpath `
+    '-DincludeScope=runtime' "-Dmdep.outputFile=$postgresClasspath"
+if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL runtime resolution failed' }
+$database = (Get-Content -Raw -LiteralPath $postgresClasspath).Trim()
+
+function Get-RuntimeJars($node) {
+    foreach ($dependency in $node.children) {
+        if ($dependency.scope -notin 'compile','runtime') { continue }
+        if ($dependency.type -ne 'jar' -or $dependency.classifier) { throw 'Unexpected runtime artifact packaging' }
+        $file = "$($dependency.artifactId)-$($dependency.version).jar"
+        if ($dependency.groupId -eq 'com.company.requests') {
+            (Resolve-Path -LiteralPath "$($dependency.artifactId)/target/$file").Path
+        } else {
+            $group = $dependency.groupId.Replace('.','/')
+            (Resolve-Path -LiteralPath (Join-Path $cache "$group/$($dependency.artifactId)/$($dependency.version)/$file")).Path
+        }
+        Get-RuntimeJars $dependency
+    }
+}
+$graph = Get-Content -Raw 'bootstrap/target/requests-dependency-tree.json' | ConvertFrom-Json
+$bootstrap = (Resolve-Path "bootstrap/target/bootstrap-$($graph.version).jar").Path
+$runtime = (@($bootstrap) + @(Get-RuntimeJars $graph) + ($database -split ';') | Select-Object -Unique) -join ';'
+
+[xml]$suite = Get-Content -Raw 'bootstrap/target/surefire-reports/TEST-com.company.requests.bootstrap.RequestsMvcSmokeTest.xml'
+$testClasspath = ($suite.testsuite.properties.property | Where-Object name -eq 'surefire.test.class.path').value
+$fixtureClasspath = ($build,$testClasspath,(Resolve-Path 'adapter-jdbc/target/test-classes').Path,$database) -join ';'
+& $javac -encoding UTF-8 -classpath $fixtureClasspath -d $build fixtures/postgresql/QualifyPostgresql.java `
+    fixtures/postgresql/B08HttpSession.java fixtures/postgresql/B08MvcSession.java fixtures/postgresql/B08Postgresql.java
+if ($LASTEXITCODE -ne 0) { throw 'B08 launcher compile failed' }
+
+$runId = 'b08-http-example-01'
+& $java "-Drequests.b08.http.runtimeClasspath=$runtime" -cp $fixtureClasspath B08Postgresql wire $bin $runs $runId
+if ($LASTEXITCODE -ne 0) { throw 'B08 listening HTTP checks failed' }
+~~~
+
+The fixture starts both owned databases and provisions the immutable synthetic policy and writer certificate. It starts the first application, issues a key over HTTP and sends an authorized Create, then closes the application and observes that its port refuses connections. The second application uses the same port, key, byte-for-byte request and live databases. A separate observer checks the committed effect and release evidence. The launcher streams credentials to each child over a private pipe and closes it to stop that child. The regular `B08Postgresql run` mode still runs the in-process JDBC fault checks and MVC subprocess checks. Use `B08Postgresql cleanup` with the original binary directory, scratch paths and run ID to recover owned PostgreSQL processes after an interruption.
+
+For a separately provisioned B08 scope, start the same application with the resolved `$runtime` classpath and a private stdin pipe. Pass an empty owned directory and a port, with `0` requesting a free port.
+
+~~~powershell
+& $java -cp $runtime com.company.requests.bootstrap.SyntheticHttpMain 0 $httpScratch
+~~~
+
+Write ten UTF-8 lines to stdin in order. Supply the workflow and proof runtime role passwords, writer UUID, writer generation, two unpadded base64url-encoded 32-byte secrets (signing and intent), then the owner, owner-alias, key-only and no-issue bearer values. Keep the pipe open while making requests and close it to stop the application. The app prints its `READY` loopback endpoint. Use a local client to send `POST /operation-keys` with the owner bearer, then `POST /requests` with that bearer, the returned `Idempotency-Key` and an exact JSON Create body. Treat the bearer and key as private inputs to the client.

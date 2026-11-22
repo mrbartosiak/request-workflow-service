@@ -25,11 +25,16 @@ import com.company.requests.domain.RequestState;
 import com.company.requests.domain.TransitionFact;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.Base64;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -82,9 +87,20 @@ public final class B08Postgresql {
 
     public static void main(String[] args) {
         try {
+            boolean wire = args.length > 0 && args[0].equals("wire");
+            String runtimeClasspath = System.getProperty("requests.b08.http.runtimeClasspath");
+            if (wire) {
+                require(runtimeClasspath != null && !runtimeClasspath.isBlank(),
+                        "Wire fixture requires the resolved application runtime classpath.");
+                args[0] = "run";
+            }
             QualifyPostgresql.workflowAndProof(args, "b08", (workflow, proof) -> {
                 var check = new B08Postgresql(workflow, proof);
                 check.provision();
+                if (wire) {
+                    check.wireRestart(runtimeClasspath, Path.of(args[2], args[3]));
+                    return;
+                }
                 check.crossProcess(Path.of(args[2], args[3]));
                 try (var mvc = check.mvc()) {
                     check.accessAndExactReplay(mvc);
@@ -215,6 +231,86 @@ public final class B08Postgresql {
                 B08MvcSession.GENERATION)), "separate preparations must identify the same scoped key and durable result");
         System.out.printf("PASS two exited application JVMs pid=%d and pid=%d, same HTTP 201 body/Location and one five-row effect%n",
                 create.pid(), replay.pid());
+    }
+
+    private void wireRestart(String runtimeClasspath, Path run) throws Exception {
+        var workflowStart = workflowObserver.queryForObject("SELECT pg_postmaster_start_time()::text", String.class);
+        var proofStart = proofObserver.queryForObject("SELECT pg_postmaster_start_time()::text", String.class);
+        var firstLog = run.resolve("http-create.log");
+        var secondLog = run.resolve("http-replay.log");
+        var workflowLogin = workflowCluster.runtimeLogin();
+        var proofLogin = proofCluster.runtimeLogin();
+        B08MvcSession.Call request;
+        B08MvcSession.Reply created;
+        long firstPid;
+        int port;
+        try (var first = B08HttpSession.start(runtimeClasspath, 0, firstLog, run.resolve("http-first"),
+                workflowLogin, proofLogin, params)) {
+            firstPid = first.pid();
+            port = first.port();
+            Instant beforeIssue = Instant.now();
+            var issued = first.invoke(B08MvcSession.Call.issue(owner()));
+            Instant afterIssue = Instant.now();
+            require(issued.status() == 201 && issued.cache().equals("no-store") && issued.location().isEmpty()
+                    && issued.contentType().startsWith("application/json") && issued.json().size() == 2,
+                    "Listening key issuance must use the scoped key response.");
+            Instant expiresAt = Instant.parse(issued.json().get("expiresAt").asString());
+            require(!expiresAt.isBefore(beforeIssue.plus(OperationKeyIssuer.VALIDITY))
+                    && !expiresAt.isAfter(afterIssue.plus(OperationKeyIssuer.VALIDITY)),
+                    "Listening key issuance must use the current application clock.");
+            String key = issued.json().get("key").asString();
+            request = B08MvcSession.Call.create(owner(), key, CREATE);
+            problem(first.invoke(B08MvcSession.Call.create("", key, CREATE)), 401, "authentication_required");
+            expectCount(0);
+            require(reservations() == 0 && preparations() == 0, "Unauthenticated HTTP request changed durable state.");
+            System.out.println("PASS listening key issuance 201 and unauthenticated Create 401 without effects or proofs");
+            created = first.invoke(request);
+            created(created);
+            expectCount(1);
+            require(originAndAssignment(created), "Listening Create must commit trusted origin, initial assignment and UTF-8 fields.");
+            expectWirePreparation(created, 1);
+        }
+        try (var second = B08HttpSession.start(runtimeClasspath, port, secondLog, run.resolve("http-second"),
+                workflowLogin, proofLogin, params)) {
+            require(firstPid != second.pid(), "Expected independent application JVMs.");
+            var replayed = second.invoke(request);
+            created(replayed);
+            require(created.equals(replayed), "Same signed key and exact intent must replay the original wire response.");
+            expectCount(1);
+            expectWirePreparation(replayed, 2);
+            System.out.printf("PASS exact HTTP 201 and Location/body equality, Location SHA-256=%s, body SHA-256=%s%n",
+                    wireHash(replayed.location()), wireHash(replayed.body()));
+        }
+        require(workflowStart.equals(workflowObserver.queryForObject("SELECT pg_postmaster_start_time()::text", String.class))
+                && proofStart.equals(proofObserver.queryForObject("SELECT pg_postmaster_start_time()::text", String.class)),
+                "Database postmasters changed during application restart.");
+        System.out.printf("PASS unchanged live workflow start=%s and proof start=%s%n", workflowStart, proofStart);
+        var encoder = Base64.getUrlEncoder().withoutPadding();
+        for (Path log : List.of(firstLog, secondLog)) {
+            String output = Files.readString(log, StandardCharsets.UTF_8);
+            require(List.of(workflowLogin.password(), proofLogin.password(), request.key(),
+                    params.bearers().get(0), params.bearers().get(1), params.bearers().get(2), params.bearers().get(3),
+                    encoder.encodeToString(params.signing()), encoder.encodeToString(params.intent()),
+                    created.json().get("ref").asString()).stream().noneMatch(output::contains),
+                    "Protected fixture material appeared in application diagnostics.");
+        }
+        System.out.println("PASS application diagnostics contain no fixture credentials, key material or disclosed reference");
+    }
+
+    private void expectWirePreparation(B08MvcSession.Reply reply, long attempts) {
+        require(reservations() == 1 && preparations() == attempts
+                && Long.valueOf(attempts).equals(proofObserver.queryForObject("""
+                SELECT CASE WHEN count(DISTINCT key_digest) = 1 THEN count(DISTINCT correlation_id) ELSE 0 END
+                FROM request_authority.release_prepared
+                WHERE organization = ? AND result_ref = ? AND result_revision = 1 AND generation = ?
+                """, Long.class, B08MvcSession.ORG.value(), reply.json().get("ref").asString(), B08MvcSession.GENERATION)),
+                "Each allowed listening result needs its own preparation for the one scoped key and committed result.");
+        System.out.printf("PASS observer found one request/body/fact/assignment/final receipt, one reservation and %d authorized release(s)%n",
+                attempts);
+    }
+
+    private static String wireHash(String value) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
     }
 
     private void accessAndExactReplay(B08MvcSession mvc) throws Exception {

@@ -1,0 +1,179 @@
+package com.company.requests.bootstrap;
+
+import com.company.requests.application.OperationSecrets;
+import com.company.requests.application.WriterEpoch;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Map;
+import java.util.Properties;
+import java.util.UUID;
+import org.apache.catalina.Lifecycle;
+import org.apache.catalina.connector.Connector;
+import org.apache.catalina.core.StandardContext;
+import org.apache.catalina.core.StandardEngine;
+import org.apache.catalina.core.StandardHost;
+import org.apache.catalina.core.StandardServer;
+import org.apache.catalina.core.StandardService;
+import org.apache.catalina.startup.Tomcat;
+import org.apache.catalina.valves.ErrorReportValve;
+import org.apache.coyote.http11.Http11NioProtocol;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
+import org.springframework.web.servlet.DispatcherServlet;
+
+/** Local B08 application for a provisioned synthetic workflow and its independent proof store. */
+public final class SyntheticHttpMain {
+    private SyntheticHttpMain() { }
+
+    public static void main(String[] args) {
+        if (args.length != 2) {
+            System.err.println("Usage: SyntheticHttpMain <port (0 for automatic)> <empty scratch directory>");
+            System.exit(2);
+        }
+        try (var input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+            int port = Integer.parseInt(args[0]);
+            if (port < 0 || port > 65535) {
+                throw new IllegalArgumentException("Invalid local HTTP port.");
+            }
+            Path scratch = Path.of(args[1]).toRealPath();
+            try (var entries = Files.list(scratch)) {
+                if (entries.findAny().isPresent()) {
+                    throw new IllegalArgumentException("An empty HTTP scratch directory is required.");
+                }
+            }
+            serve(port, scratch, settings(input), input);
+        } catch (Exception failure) {
+            System.err.println("Synthetic HTTP application failed (" + failure.getClass().getSimpleName() + ").");
+            System.exit(1);
+        }
+    }
+
+    private static void serve(int port, Path scratch, SyntheticCreateConfiguration.Settings settings,
+                              BufferedReader input) throws Exception {
+        var connector = new Connector(Http11NioProtocol.class.getName());
+        connector.setPort(port);
+        connector.setScheme("http");
+        connector.setSecure(false);
+        var http = (Http11NioProtocol) connector.getProtocolHandler();
+        http.setAddress(InetAddress.getByAddress(new byte[] {127, 0, 0, 1}));
+        http.setSSLEnabled(false);
+
+        var server = new StandardServer();
+        server.setPort(-1);
+        server.setCatalinaBase(scratch.toFile());
+        server.setCatalinaHome(scratch.toFile());
+        var service = new StandardService();
+        service.setName("B08");
+        server.addService(service);
+        var engine = new StandardEngine();
+        engine.setName("B08");
+        engine.setDefaultHost("127.0.0.1");
+        service.setContainer(engine);
+        var host = new StandardHost();
+        host.setName("127.0.0.1");
+        host.setAppBase(scratch.toString());
+        host.setAutoDeploy(false);
+        host.setDeployOnStartup(false);
+        host.setCreateDirs(false);
+        var errors = new ErrorReportValve();
+        errors.setShowReport(false);
+        errors.setShowServerInfo(false);
+        host.getPipeline().addValve(errors);
+        engine.addChild(host);
+        var web = new StandardContext();
+        web.setName("");
+        web.setPath("");
+        web.setDocBase(Files.createDirectory(scratch.resolve("web")).toString());
+        web.setWorkDir(Files.createDirectory(scratch.resolve("work")).toString());
+        web.setUseNaming(false);
+        web.addLifecycleListener(event -> {
+            if (Lifecycle.CONFIGURE_START_EVENT.equals(event.getType())) {
+                web.setConfigured(true);
+            }
+        });
+        host.addChild(web);
+
+        try (var spring = new AnnotationConfigWebApplicationContext()) {
+            spring.setServletContext(web.getServletContext());
+            spring.addBeanFactoryPostProcessor(factory -> factory.registerSingleton("b08SyntheticSettings", settings));
+            spring.register(SyntheticCreateConfiguration.class);
+            spring.refresh();
+            var requests = spring.getBean(DispatcherServlet.class);
+            requests.setEnableLoggingRequestDetails(false);
+            var dispatcher = Tomcat.addServlet(web, "requests", requests);
+            dispatcher.setLoadOnStartup(1);
+            web.addServletMapping("/", "requests", false);
+            service.addConnector(connector);
+            try {
+                server.start();
+                int boundPort = connector.getLocalPort();
+                if (boundPort <= 0 || !connector.getState().isAvailable() || !web.getState().isAvailable()) {
+                    throw new IllegalStateException("Synthetic MVC connector failed to start.");
+                }
+                System.out.println("READY http://127.0.0.1:" + boundPort);
+                System.out.flush();
+                if (input.read() != -1) {
+                    throw new IOException("Close the configuration stream to stop the application.");
+                }
+            } finally {
+                try {
+                    server.stop();
+                } finally {
+                    server.destroy();
+                }
+            }
+        }
+    }
+
+    private static SyntheticCreateConfiguration.Settings settings(BufferedReader input) throws IOException {
+        var command = localDataSource(55480, "workflow_db", "b04_workflow", requiredLine(input));
+        var proof = localDataSource(55481, "proof_db", "b04_proof", requiredLine(input));
+        var writer = new WriterEpoch(UUID.fromString(requiredLine(input)), Long.parseLong(requiredLine(input)));
+        var secrets = new OperationSecrets(1, Map.of(1, secret(input)), 1, Map.of(1, secret(input)));
+        var actors = B08SyntheticScope.actors(requiredLine(input), requiredLine(input), requiredLine(input),
+                requiredLine(input));
+        return new SyntheticCreateConfiguration.Settings(command, proof, B08SyntheticScope.POLICY, writer,
+                actors, Instant::now, secrets);
+    }
+
+    private static String requiredLine(BufferedReader input) throws IOException {
+        String line = input.readLine();
+        if (line == null || line.isBlank()) {
+            throw new IOException("Missing synthetic configuration field.");
+        }
+        return line;
+    }
+
+    private static byte[] secret(BufferedReader input) throws IOException {
+        byte[] decoded = Base64.getUrlDecoder().decode(requiredLine(input));
+        if (decoded.length != 32) {
+            throw new IOException("Expected a 32-byte synthetic secret.");
+        }
+        return decoded;
+    }
+
+    private static DriverManagerDataSource localDataSource(int port, String database, String user, String password) {
+        var properties = new Properties();
+        properties.setProperty("sslmode", "disable");
+        properties.setProperty("gssEncMode", "disable");
+        properties.setProperty("requireAuth", "scram-sha-256");
+        properties.setProperty("connectTimeout", "3");
+        properties.setProperty("loginTimeout", "5");
+        properties.setProperty("socketTimeout", "6");
+        properties.setProperty("options",
+                "-c statement_timeout=4000 -c lock_timeout=2500 -c idle_in_transaction_session_timeout=12000");
+        var source = new DriverManagerDataSource();
+        source.setUrl("jdbc:postgresql://127.0.0.1:" + port + "/" + database);
+        source.setUsername(user);
+        source.setPassword(password);
+        source.setConnectionProperties(properties);
+        return source;
+    }
+}
