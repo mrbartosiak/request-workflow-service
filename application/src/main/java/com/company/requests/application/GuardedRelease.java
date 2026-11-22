@@ -53,6 +53,26 @@ public final class GuardedRelease {
 
     public record Prepared(Payload payload, Predicate<Context> remainsAuthorized) { }
 
+    /** Recheck a current read projection in the guard before handing off its encoded envelope. */
+    <T> byte[] handoffRead(AuthenticatedActor actor, Function<Context, T> project, Function<T, byte[]> encode,
+                           ReleaseBuffer buffer) {
+        Outcome outcome;
+        try {
+            outcome = handoff(actor.organization(), guard -> access.requireActionScope(actor, guard), () -> true,
+                    context -> {
+                        var result = project.apply(context);
+                        return Optional.of(new Prepared(new Payload(encode.apply(result), Optional.empty()),
+                                current -> result.equals(project.apply(current))));
+                    }, buffer);
+        } catch (TransactionBusyException | TransactionResourceUnavailableException | CommitOutcomeUnknownException failure) {
+            throw new AuthorityUnavailableException();
+        }
+        if (outcome != Outcome.HANDED_OFF) {
+            throw new AuthorityUnavailableException();
+        }
+        return buffer.take().orElseThrow(AuthorityUnavailableException::new);
+    }
+
     /**
      * The trusted loader resolves a verified operation key on the current command connection.
      * B08 supplies trusted-clock freshness and a bounded callback for independent preparation and

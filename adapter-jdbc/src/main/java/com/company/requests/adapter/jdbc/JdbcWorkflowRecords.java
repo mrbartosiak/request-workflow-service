@@ -179,6 +179,15 @@ public final class JdbcWorkflowRecords implements RequestStore, ExistingRequestS
     }
 
     @Override
+    public List<HistoryFact> findHistory(PolicyGuard guard, RequestRef ref) {
+        JdbcTransactionRunner.requireGuard(dataSource, guard);
+        return List.copyOf(jdbc.query("""
+                SELECT sequence, revision, action, from_state, to_state
+                FROM requests.transition_fact WHERE organization = ? AND ref = ? ORDER BY sequence
+                """, (row, index) -> historyFact(row), guard.organization().value(), ref.value()));
+    }
+
+    @Override
     public void insert(PolicyGuard guard) {
         JdbcTransactionRunner.requireBoundConnection(dataSource);
         jdbc.update("INSERT INTO requests.policy_guard (organization, policy_version) VALUES (?, ?)",
@@ -224,6 +233,17 @@ public final class JdbcWorkflowRecords implements RequestStore, ExistingRequestS
                 Action.valueOf(row.getString("action")), from == null ? null : RequestState.valueOf(from),
                 RequestState.valueOf(row.getString("to_state")),
                 new TransitionFact.Occurrence(recorded, row.getString("actor_ref")));
+    }
+
+    private static HistoryFact historyFact(ResultSet row) throws SQLException {
+        var from = row.getString("from_state");
+        try {
+            return new HistoryFact(row.getLong("sequence"), row.getLong("revision"),
+                    Action.valueOf(row.getString("action")), from == null ? null : RequestState.valueOf(from),
+                    RequestState.valueOf(row.getString("to_state")));
+        } catch (IllegalArgumentException invalidFact) {
+            throw new AuthorityUnavailableException();
+        }
     }
 
     static Optional<PublicationId> publicationId(ResultSet row) throws SQLException {

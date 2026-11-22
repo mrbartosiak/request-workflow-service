@@ -32,23 +32,7 @@ public final class RequestDetailQuery {
     }
 
     public byte[] release(AuthenticatedActor actor, RequestRef ref, Function<Optional<View>, byte[]> encode) {
-        var slot = ReleaseBuffer.requestRead();
-        GuardedRelease.Outcome outcome;
-        try {
-            outcome = release.handoff(actor.organization(), guard -> access.requireActionScope(actor, guard),
-                    () -> true, context -> {
-                        var view = project(actor, context, ref);
-                        return Optional.of(new GuardedRelease.Prepared(
-                                new GuardedRelease.Payload(encode.apply(view), Optional.empty()),
-                                current -> view.equals(project(actor, current, ref))));
-                    }, slot);
-        } catch (TransactionBusyException | TransactionResourceUnavailableException | CommitOutcomeUnknownException failure) {
-            throw new AuthorityUnavailableException();
-        }
-        if (outcome != GuardedRelease.Outcome.HANDED_OFF) {
-            throw new AuthorityUnavailableException();
-        }
-        return slot.take().orElseThrow(AuthorityUnavailableException::new);
+        return release.handoffRead(actor, context -> project(actor, context, ref), encode, ReleaseBuffer.requestRead());
     }
 
     private Optional<View> project(AuthenticatedActor actor, GuardedRelease.Context context, RequestRef ref) {

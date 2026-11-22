@@ -218,6 +218,10 @@ public final class QualifyPostgresql {
         workflowAndProof(args, "b19", null, null, null, null, check);
     }
 
+    static void requestHistory(String[] args, ReleaseCheck check) throws Exception {
+        workflowAndProof(args, "b20", null, null, null, null, check);
+    }
+
     static void guardedRelease(String[] args, ReleaseCheck check) throws Exception {
         workflowAndProof(args, "b12", null, null, null, null, check);
     }
@@ -239,7 +243,7 @@ public final class QualifyPostgresql {
         boolean withEffective = effectiveCheck != null || withRelease;
         boolean withResolver = resolverCheck != null || withEffective;
         boolean withRestore = scopeCheck != null || resolverCheck != null || withRelease;
-        require(List.of("b06", "b08", "b09", "b10", "b11", "b12", "b13", "b14", "b15", "b16", "b17", "b19").contains(ticket),
+        require(List.of("b06", "b08", "b09", "b10", "b11", "b12", "b13", "b14", "b15", "b16", "b17", "b19", "b20").contains(ticket),
                 "Unexpected dual-cluster fixture ticket");
         String label = ticket.toUpperCase(Locale.ROOT);
         require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),

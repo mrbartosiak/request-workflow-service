@@ -9,6 +9,7 @@ import com.company.requests.adapter.http.SyntheticActionContextController;
 import com.company.requests.adapter.http.SyntheticCreateController;
 import com.company.requests.adapter.http.SyntheticRequestActionController;
 import com.company.requests.adapter.http.SyntheticRequestDetailController;
+import com.company.requests.adapter.http.SyntheticRequestHistoryController;
 import com.company.requests.adapter.jdbc.JdbcEffectiveScopeStore;
 import com.company.requests.adapter.jdbc.JdbcPublicationConfirmationStore;
 import com.company.requests.adapter.jdbc.JdbcPublishGate;
@@ -32,6 +33,7 @@ import com.company.requests.application.PublicationProof;
 import com.company.requests.application.PublicationProofResolver;
 import com.company.requests.application.RequestActionCommand;
 import com.company.requests.application.RequestDetailQuery;
+import com.company.requests.application.RequestHistoryQuery;
 import com.company.requests.application.ScopeAuthorityMutation;
 import com.company.requests.application.ScopeProofResolver;
 import com.company.requests.application.SyntheticScopePolicy;
@@ -99,7 +101,8 @@ public class SyntheticEffectiveAccessConfiguration {
     public record Components(CurrentAccess access, CreateCommand create, EffectiveScopeUpdates updates,
                              ScopeProofResolver resolver, Optional<ActionContextService> actionContext,
                              Optional<RequestActionCommand> requestActions,
-                             Optional<PublicationProofResolver> publicationResolver, RequestDetailQuery details) { }
+                             Optional<PublicationProofResolver> publicationResolver, RequestDetailQuery details,
+                             RequestHistoryQuery history) { }
 
     @Bean
     public static Components effectiveScopeComponents(Settings settings) {
@@ -152,7 +155,7 @@ public class SyntheticEffectiveAccessConfiguration {
         }));
         return new Components(access, SyntheticCreateConfiguration.createCommand(create, transactions, records, access),
                 updates, resolver, contexts, actions, publicationResolver,
-                new RequestDetailQuery(access, records, readRelease));
+                new RequestDetailQuery(access, records, readRelease), new RequestHistoryQuery(access, records, readRelease));
     }
 
     @Bean
@@ -183,5 +186,13 @@ public class SyntheticEffectiveAccessConfiguration {
         var create = settings.create();
         return new SyntheticRequestDetailController(create.policy().genesis().organization(), create.actors(),
                 inputs, components.details());
+    }
+
+    @Bean
+    SyntheticRequestHistoryController syntheticRequestHistoryController(Settings settings, Components components,
+                                                                         RestInputValidator inputs) {
+        var create = settings.create();
+        return new SyntheticRequestHistoryController(create.policy().genesis().organization(), create.actors(),
+                inputs, components.history());
     }
 }

@@ -137,37 +137,55 @@ public final class CurrentAccess {
     /** Current row and field access after the caller has proved scope on its release guard. */
     Optional<ReadTarget> readTarget(AuthenticatedActor actor, GuardedRelease.Context context, RequestRef ref) {
         var policy = policy(actor);
+        return visibleReadTarget(actor, context.guard(), policy, ref, Optional.empty())
+                .map(target -> detailTarget(actor, context, policy, target));
+    }
+
+    Optional<Request> readHistoryTarget(AuthenticatedActor actor, GuardedRelease.Context context, RequestRef ref) {
+        return visibleReadTarget(actor, context.guard(), policy(actor), ref, Optional.of(Grant.HISTORY_READ))
+                .map(target -> {
+                    var request = target.request();
+                    if (request.state() == RequestState.PUBLISHED && readPublication(context, request).isEmpty()) {
+                        throw new AuthorityUnavailableException();
+                    }
+                    return request;
+                });
+    }
+
+    private Optional<VisibleReadTarget> visibleReadTarget(AuthenticatedActor actor, PolicyGuard guard,
+                                                          SyntheticScopePolicy policy, RequestRef ref,
+                                                          Optional<Grant> additionalGrant) {
         try {
             policy.grant(actor);
-            return scopedTarget(actor, context.guard(), ref)
-                    .flatMap(target -> readTarget(actor, context, policy, target));
+            return scopedTarget(actor, guard, ref).flatMap(target -> {
+                var type = target.type();
+                if (!permitted(policy, guard, actor, Grant.ROW_READ, type)
+                        || (target.state() == RequestState.DELETED
+                            && !permitted(policy, guard, actor, Grant.DELETED_METADATA, type))
+                        || additionalGrant.filter(grant -> !permitted(policy, guard, actor, grant, type)).isPresent()) {
+                    return Optional.empty();
+                }
+                var scope = rowScope(actor, guard, target);
+                return scope.visible() ? Optional.of(new VisibleReadTarget(target, scope)) : Optional.empty();
+            });
         } catch (AccessDeniedException unregistered) {
             return Optional.empty();
         }
     }
 
-    private Optional<ReadTarget> readTarget(AuthenticatedActor actor, GuardedRelease.Context context,
-                                            SyntheticScopePolicy policy, Request target) {
+    private ReadTarget detailTarget(AuthenticatedActor actor, GuardedRelease.Context context,
+                                    SyntheticScopePolicy policy, VisibleReadTarget visible) {
         var guard = context.guard();
+        var target = visible.request();
         var type = target.type();
-        if (!permitted(policy, guard, actor, Grant.ROW_READ, type)) {
-            return Optional.empty();
-        }
-        boolean deleted = target.state() == RequestState.DELETED;
-        if (deleted && !permitted(policy, guard, actor, Grant.DELETED_METADATA, type)) {
-            return Optional.empty();
-        }
-        var scope = rowScope(actor, guard, target);
-        if (!scope.visible()) {
-            return Optional.empty();
-        }
+        var scope = visible.scope();
         var fields = EnumSet.noneOf(ReadField.class);
         if (scope.visibility().fields().contains(Field.STATE)
                 && permitted(policy, guard, actor, Grant.FIELD_READ_STATE, type)) {
             fields.add(ReadField.STATE);
         }
-        if (deleted) {
-            return Optional.of(new ReadTarget(target, Set.copyOf(fields), Optional.empty(), false));
+        if (target.state() == RequestState.DELETED) {
+            return new ReadTarget(target, Set.copyOf(fields), Optional.empty(), false);
         }
         if (permitted(policy, guard, actor, Grant.FIELD_READ_TYPE, type)) {
             fields.add(ReadField.TYPE);
@@ -183,14 +201,21 @@ public final class CurrentAccess {
                 && permitted(policy, guard, actor, Grant.FIELD_READ_BODY, type)) {
             fields.add(ReadField.BODY);
         }
-        var publication = target.state() == RequestState.PUBLISHED
-                ? effective.publication().flatMap(proof -> proof.confirmed(
-                        context.admission(), guard, target, Optional.empty())).flatMap(PublicationJournal.Entry::allocation)
-                : Optional.<PublicationId>empty();
+        var publication = readPublication(context, target);
         var disclosedPublication = publication.filter(ignored -> permitsPublicationField(actor, guard, target));
-        return Optional.of(new ReadTarget(target, Set.copyOf(fields), disclosedPublication,
-                target.state() == RequestState.PUBLISHED && publication.isEmpty()));
+        return new ReadTarget(target, Set.copyOf(fields), disclosedPublication,
+                target.state() == RequestState.PUBLISHED && publication.isEmpty());
     }
+
+    private Optional<PublicationId> readPublication(GuardedRelease.Context context, Request target) {
+        return target.state() == RequestState.PUBLISHED
+                ? effective.publication().flatMap(proof -> proof.confirmed(
+                        context.admission(), context.guard(), target, Optional.empty()))
+                        .flatMap(PublicationJournal.Entry::allocation)
+                : Optional.empty();
+    }
+
+    private record VisibleReadTarget(Request request, RowScope scope) { }
 
     enum ReadField { TYPE, NAME, BODY, STATE, REVISION }
 

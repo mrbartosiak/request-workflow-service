@@ -290,3 +290,9 @@ Compile `B17Postgresql.java` with the B12–B16 fixture launcher dependencies. R
 Apply `JdbcWorkflowMigrations.migrateDetailGrants()` as the workflow schema owner. Enable `ROW_READ` and each applicable field grant through the scope operator and audited resolver. `FIELD_READ_TYPE`, `FIELD_READ_STATE` and `FIELD_READ_REVISION` are explicit grants. The existing material and publication field grants apply independently. The deleted synthetic view requires `DELETED_METADATA` and can include the separately granted retained state.
 
 Add `B19Postgresql.java` to the B17 launcher compilation. Run `B19Postgresql run` with the qualified binaries, the scratch `runs` directory and a fresh `b19-*` run ID under the exclusive fixture lease for ports 55480–55482. Use `B19Postgresql cleanup` with the same remaining arguments after an interruption. The fixture exercises the registered MVC routes, verifies the exact masks and observed wire headers, and pauses the shared release and the exclusive visibility writers in both orders.
+
+## B20 protected ordered history
+
+Apply `JdbcWorkflowMigrations.migrateHistoryGrants()` as the workflow schema owner. Enable `HISTORY_READ` by actor and request type through the scope operator and audited resolver. The route also requires current row visibility and, for deleted requests, `DELETED_METADATA`.
+
+Add `B20Postgresql.java` to the B19 launcher compilation. Run `B20Postgresql run` with the qualified binaries, the scratch `runs` directory and a fresh `b20-*` run ID under the exclusive fixture lease for ports 55480–55482. Use `B20Postgresql cleanup` with the same remaining arguments after an interruption. The fixture verifies history bytes and durable counts for all four terminal paths, Edit and replay, inconsistent facts and grant revocation. It restarts the proof database and MVC before repeating the comparisons and restarts the workflow database to verify the existing certification fence.

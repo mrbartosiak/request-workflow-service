@@ -42,6 +42,7 @@ class RequestActionMvcSmokeTest {
             var mvc = MockMvcBuilders.webAppContextSetup(context).build();
             var requests = List.of(
                     MockMvcRequestBuilders.get("/requests/example?unexpected=value"),
+                    MockMvcRequestBuilders.get("/requests/example/history?unexpected=value"),
                     MockMvcRequestBuilders.patch("/requests/example/body?unexpected=value"),
                     MockMvcRequestBuilders.post("/requests/example/actions/verify?unexpected=value"),
                     MockMvcRequestBuilders.post("/requests/example/actions/accept?unexpected=value"),

@@ -179,5 +179,6 @@ class GuardedReleaseExpiryTest {
         @Override public Optional<Request> find(OrganizationId org, RequestRef ref) { return findRequest.get(); }
         @Override public Optional<RequestBody> findRetainedBody(OrganizationId org, RequestRef ref) { return unexpectedCall(); }
         @Override public List<TransitionFact> findFacts(OrganizationId org, RequestRef ref) { return unexpectedCall(); }
+        @Override public List<HistoryFact> findHistory(PolicyGuard guard, RequestRef ref) { return unexpectedCall(); }
     }
 }

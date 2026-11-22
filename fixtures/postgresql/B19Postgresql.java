@@ -384,7 +384,7 @@ public final class B19Postgresql {
         System.out.printf("WIRE %d %s %s%n", response.getStatus(), headers(response), body);
     }
 
-    private static ObjectNode problem(MockHttpServletResponse response, int status, String code, String title)
+    static ObjectNode problem(MockHttpServletResponse response, int status, String code, String title)
             throws Exception {
         require(response.getStatus() == status && response.getContentType() != null
                 && MediaType.APPLICATION_PROBLEM_JSON.isCompatibleWith(MediaType.parseMediaType(response.getContentType()))
@@ -414,12 +414,12 @@ public final class B19Postgresql {
                 "expected pending authority response, got " + response.status());
     }
 
-    private static void equivalent404(MockHttpServletResponse absent, MockHttpServletResponse concealed) throws Exception {
+    static void equivalent404(MockHttpServletResponse absent, MockHttpServletResponse concealed) throws Exception {
         require(problem(absent, 404, "not_found", "Not found").equals(problem(concealed, 404, "not_found", "Not found"))
                 && headers(absent).equals(headers(concealed)), "concealed request differed from ordinary 404");
     }
 
-    private static Map<String, List<String>> headers(MockHttpServletResponse response) {
+    static Map<String, List<String>> headers(MockHttpServletResponse response) {
         var headers = new TreeMap<String, List<String>>(String.CASE_INSENSITIVE_ORDER);
         response.getHeaderNames().forEach(name -> headers.put(name, response.getHeaders(name)));
         return headers;
