@@ -8,8 +8,10 @@ import com.company.requests.adapter.http.RestInputValidator;
 import com.company.requests.adapter.http.SyntheticActionContextController;
 import com.company.requests.adapter.http.SyntheticCreateController;
 import com.company.requests.adapter.http.SyntheticRequestActionController;
+import com.company.requests.adapter.http.SyntheticRequestBrowseController;
 import com.company.requests.adapter.http.SyntheticRequestDetailController;
 import com.company.requests.adapter.http.SyntheticRequestHistoryController;
+import com.company.requests.adapter.jdbc.JdbcBrowseCandidates;
 import com.company.requests.adapter.jdbc.JdbcEffectiveScopeStore;
 import com.company.requests.adapter.jdbc.JdbcOutboxAppender;
 import com.company.requests.adapter.jdbc.JdbcPublicationConfirmationStore;
@@ -22,6 +24,7 @@ import com.company.requests.adapter.jdbc.JdbcWorkflowIdentity;
 import com.company.requests.adapter.jdbc.JdbcWorkflowRecords;
 import com.company.requests.application.ActionContextService;
 import com.company.requests.application.AuthenticatedActor;
+import com.company.requests.application.BrowseCursorCodec;
 import com.company.requests.application.CreateCommand;
 import com.company.requests.application.CurrentAccess;
 import com.company.requests.application.EffectiveScopeGate;
@@ -33,6 +36,7 @@ import com.company.requests.application.OperationKeyIssuer;
 import com.company.requests.application.PublicationProof;
 import com.company.requests.application.PublicationProofResolver;
 import com.company.requests.application.RequestActionCommand;
+import com.company.requests.application.RequestBrowseQuery;
 import com.company.requests.application.RequestDetailQuery;
 import com.company.requests.application.RequestHistoryQuery;
 import com.company.requests.application.ScopeAuthorityMutation;
@@ -61,7 +65,7 @@ public class SyntheticEffectiveAccessConfiguration {
                            DataSource originalObserver, DataSource projection, DataSource resolver,
                            Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators,
                            Optional<ObservationCodec.Keys> observationKeys, boolean publicationEnabled,
-                           Optional<PublishOutboxTrigger> publishOutbox) {
+                           Optional<PublishOutboxTrigger> publishOutbox, Optional<BrowseCursorCodec.Keys> browseKeys) {
         public Settings(SyntheticCreateConfiguration.Settings create, DataSource preparation,
                         DataSource originalObserver, DataSource projection, DataSource resolver,
                         Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators) {
@@ -83,10 +87,20 @@ public class SyntheticEffectiveAccessConfiguration {
                     publicationEnabled, Optional.empty());
         }
 
+        public Settings(SyntheticCreateConfiguration.Settings create, DataSource preparation,
+                        DataSource originalObserver, DataSource projection, DataSource resolver,
+                        Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators,
+                        Optional<ObservationCodec.Keys> observationKeys, boolean publicationEnabled,
+                        Optional<PublishOutboxTrigger> publishOutbox) {
+            this(create, preparation, originalObserver, projection, resolver, operators, observationKeys,
+                    publicationEnabled, publishOutbox, Optional.empty());
+        }
+
         public Settings {
             Objects.requireNonNull(create);
             Objects.requireNonNull(observationKeys);
             Objects.requireNonNull(publishOutbox);
+            Objects.requireNonNull(browseKeys);
             if (publicationEnabled && (observationKeys.isEmpty() || create.guardedReplay().isEmpty())) {
                 throw new IllegalArgumentException("Publish requires observation keys and guarded replay.");
             }
@@ -107,6 +121,11 @@ public class SyntheticEffectiveAccessConfiguration {
             return create.policy().withMutationOperators(operators);
         }
 
+        public Settings withBrowseKeys(BrowseCursorCodec.Keys keys) {
+            return new Settings(create, preparation, originalObserver, projection, resolver, operators, observationKeys,
+                    publicationEnabled, publishOutbox, Optional.of(keys));
+        }
+
         @Override
         public String toString() {
             return "SyntheticEffectiveAccessSettings[protected]";
@@ -120,7 +139,7 @@ public class SyntheticEffectiveAccessConfiguration {
                              ScopeProofResolver resolver, Optional<ActionContextService> actionContext,
                              Optional<RequestActionCommand> requestActions,
                              Optional<PublicationProofResolver> publicationResolver, RequestDetailQuery details,
-                             RequestHistoryQuery history) { }
+                             RequestHistoryQuery history, Optional<RequestBrowseQuery> browse) { }
 
     @Bean
     public static Components effectiveScopeComponents(Settings settings) {
@@ -173,9 +192,12 @@ public class SyntheticEffectiveAccessConfiguration {
                     keys, new IntentDigest(create.secrets()), receipts, receipts, records, records, context, policy,
                     store, mutation, release, replay.preparation(), replay.originalReceipts(), publisher);
         }));
+        var browse = settings.browseKeys().map(keys -> new RequestBrowseQuery(access, new JdbcBrowseCandidates(command),
+                readRelease, new BrowseCursorCodec(keys, create.secrets(), settings.observationKeys()), create.clock()));
         return new Components(access, SyntheticCreateConfiguration.createCommand(create, transactions, records, access),
                 updates, resolver, contexts, actions, publicationResolver,
-                new RequestDetailQuery(access, records, readRelease), new RequestHistoryQuery(access, records, readRelease));
+                new RequestDetailQuery(access, records, readRelease), new RequestHistoryQuery(access, records, readRelease),
+                browse);
     }
 
     @Bean
@@ -214,5 +236,13 @@ public class SyntheticEffectiveAccessConfiguration {
         var create = settings.create();
         return new SyntheticRequestHistoryController(create.policy().genesis().organization(), create.actors(),
                 inputs, components.history());
+    }
+
+    @Bean
+    SyntheticRequestBrowseController syntheticRequestBrowseController(Settings settings, Components components,
+                                                                       RestInputValidator inputs) {
+        var create = settings.create();
+        return new SyntheticRequestBrowseController(create.policy().genesis().organization(), create.actors(),
+                inputs, components.browse());
     }
 }

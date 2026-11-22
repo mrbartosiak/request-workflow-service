@@ -138,7 +138,30 @@ public final class CurrentAccess {
     Optional<ReadTarget> readTarget(AuthenticatedActor actor, GuardedRelease.Context context, RequestRef ref) {
         var policy = policy(actor);
         return visibleReadTarget(actor, context.guard(), policy, ref, Optional.empty())
-                .map(target -> detailTarget(actor, context, policy, target));
+                .map(target -> detailTarget(actor, context.guard(), policy, target,
+                        readPublication(context, target.request())));
+    }
+
+    Optional<ReadTarget> readBrowseTarget(AuthenticatedActor actor, GuardedRelease.Context context, RequestRef ref,
+                                          boolean filterName, boolean filterState) {
+        var policy = policy(actor);
+        var guard = context.guard();
+        return visibleReadTarget(actor, guard, policy, ref, Optional.empty())
+                .map(visible -> detailTarget(actor, guard, policy, visible, browsePublication(context, visible.request())))
+                .filter(target -> !target.publicationPending())
+                .filter(target -> !filterName || (target.fields().contains(ReadField.NAME)
+                        && permitted(policy, guard, actor, Grant.FIELD_FILTER_NAME, target.request().type())))
+                .filter(target -> !filterState || (target.fields().contains(ReadField.STATE)
+                        && permitted(policy, guard, actor, Grant.FIELD_FILTER_STATE, target.request().type())));
+    }
+
+    private Optional<PublicationId> browsePublication(GuardedRelease.Context context, Request request) {
+        try {
+            return readPublication(context, request);
+        } catch (AuthorityUnavailableException unavailable) {
+            // An unproved publication is withheld from both membership and lookahead.
+            return Optional.empty();
+        }
     }
 
     Optional<Request> readHistoryTarget(AuthenticatedActor actor, GuardedRelease.Context context, RequestRef ref) {
@@ -173,9 +196,8 @@ public final class CurrentAccess {
         }
     }
 
-    private ReadTarget detailTarget(AuthenticatedActor actor, GuardedRelease.Context context,
-                                    SyntheticScopePolicy policy, VisibleReadTarget visible) {
-        var guard = context.guard();
+    private ReadTarget detailTarget(AuthenticatedActor actor, PolicyGuard guard, SyntheticScopePolicy policy,
+                                    VisibleReadTarget visible, Optional<PublicationId> publication) {
         var target = visible.request();
         var type = target.type();
         var scope = visible.scope();
@@ -201,7 +223,6 @@ public final class CurrentAccess {
                 && permitted(policy, guard, actor, Grant.FIELD_READ_BODY, type)) {
             fields.add(ReadField.BODY);
         }
-        var publication = readPublication(context, target);
         var disclosedPublication = publication.filter(ignored -> permitsPublicationField(actor, guard, target));
         return new ReadTarget(target, Set.copyOf(fields), disclosedPublication,
                 target.state() == RequestState.PUBLISHED && publication.isEmpty());

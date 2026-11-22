@@ -82,6 +82,10 @@ public final class ObservationCodec {
             return new IllegalArgumentException("Invalid observation key configuration.");
         }
 
+        boolean containsMaterial(byte[] material) {
+            return entries.containsValue(new SecretKeySpec(material, "AES"));
+        }
+
         @Override
         public String toString() {
             return "ObservationKeys[protected]";

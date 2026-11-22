@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class RequestActionMvcSmokeTest {
     @Test
-    void effectiveProfileAuthenticatesExistingRequestActionsBeforeValidationOrStorage() throws Exception {
+    void effectiveProfileAuthenticatesProtectedReadsAndActionsBeforeValidationOrStorage() throws Exception {
         var organization = new OrganizationId("synthetic-context-smoke");
         var policy = new SyntheticScopePolicy(organization, 1, List.of());
         var actors = new SyntheticActorResolver("synthetic", "requests", List.of());
@@ -41,6 +41,7 @@ class RequestActionMvcSmokeTest {
             context.refresh();
             var mvc = MockMvcBuilders.webAppContextSetup(context).build();
             var requests = List.of(
+                    MockMvcRequestBuilders.get("/requests?unexpected=value"),
                     MockMvcRequestBuilders.get("/requests/example?unexpected=value"),
                     MockMvcRequestBuilders.get("/requests/example/history?unexpected=value"),
                     MockMvcRequestBuilders.patch("/requests/example/body?unexpected=value"),

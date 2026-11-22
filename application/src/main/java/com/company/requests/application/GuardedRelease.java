@@ -47,7 +47,17 @@ public final class GuardedRelease {
 
     public enum Outcome { HANDED_OFF, WITHHELD, FRESHNESS_LOST, BUFFER_UNAVAILABLE, BUDGET_EXCEEDED }
 
-    public record Context(PolicyGuard guard, Admission admission) { }
+    public record Context(PolicyGuard guard, Admission admission, BooleanSupplier withinBudget) {
+        public Context(PolicyGuard guard, Admission admission) {
+            this(guard, admission, () -> true);
+        }
+
+        void requireWithinBudget() {
+            if (!withinBudget.getAsBoolean()) {
+                throw new AuthorityUnavailableException();
+            }
+        }
+    }
 
     public record Payload(byte[] bytes, Optional<ReleaseEvidence.Correlation> correlation) { }
 
@@ -56,9 +66,14 @@ public final class GuardedRelease {
     /** Recheck a current read projection in the guard before handing off its encoded envelope. */
     <T> byte[] handoffRead(AuthenticatedActor actor, Function<Context, T> project, Function<T, byte[]> encode,
                            ReleaseBuffer buffer) {
+        return handoffRead(actor, project, encode, buffer, () -> true);
+    }
+
+    <T> byte[] handoffRead(AuthenticatedActor actor, Function<Context, T> project, Function<T, byte[]> encode,
+                           ReleaseBuffer buffer, BooleanSupplier fresh) {
         Outcome outcome;
         try {
-            outcome = handoff(actor.organization(), guard -> access.requireActionScope(actor, guard), () -> true,
+            outcome = handoff(actor.organization(), guard -> access.requireActionScope(actor, guard), fresh,
                     context -> {
                         var result = project.apply(context);
                         return Optional.of(new Prepared(new Payload(encode.apply(result), Optional.empty()),
@@ -146,9 +161,10 @@ public final class GuardedRelease {
         if (!withinBudget.getAsBoolean()) {
             return Outcome.BUDGET_EXCEEDED;
         }
-        var candidate = prepare.apply(new Context(guard, admission));
+        var context = new Context(guard, admission, withinBudget);
+        var candidate = prepare.apply(context);
 
-        boolean authorized = candidate.filter(value -> value.remainsAuthorized().test(new Context(guard, admission)))
+        boolean authorized = candidate.filter(value -> value.remainsAuthorized().test(context))
                 .isPresent();
         if (!admission.equals(authorize.apply(guard))) {
             throw new AuthorityUnavailableException();

@@ -302,7 +302,14 @@ public final class RestInputValidator {
             if (!allowed.contains(name) || values.containsKey(name)) {
                 throw invalid(null);
             }
-            values.put(name, decodeUriComponent(parameter.substring(equals + 1), true));
+            try {
+                values.put(name, decodeUriComponent(parameter.substring(equals + 1), true));
+            } catch (RestInputException malformed) {
+                if (name.equals(CURSOR.wireName())) {
+                    throw invalid(CURSOR);
+                }
+                throw malformed;
+            }
         }
         return values;
     }
