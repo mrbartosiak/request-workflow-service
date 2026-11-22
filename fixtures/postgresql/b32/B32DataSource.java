@@ -9,45 +9,29 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
-import java.util.Properties;
 import org.postgresql.PGConnection;
 import org.springframework.jdbc.datasource.AbstractDataSource;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 /** Fixture-only JDBC decorator. Spring still uses its normal command and proof transaction paths. */
-final class B32DataSource extends AbstractDataSource {
-    private final DriverManagerDataSource source = new DriverManagerDataSource();
+final class B32DataSource extends AbstractDataSource implements AutoCloseable {
+    private final B32Pool pool;
     private final Store store;
     private final B32Gate gates;
 
     B32DataSource(Store store, String application, String password, B32Gate gates) {
         this.store = store;
         this.gates = gates;
-        var properties = new Properties();
-        properties.setProperty("ApplicationName", application);
-        properties.setProperty("currentSchema", store.schema);
-        properties.setProperty("sslmode", "disable");
-        properties.setProperty("gssEncMode", "disable");
-        properties.setProperty("requireAuth", "scram-sha-256");
-        properties.setProperty("connectTimeout", "3");
-        properties.setProperty("loginTimeout", "5");
-        properties.setProperty("socketTimeout", "6");
-        properties.setProperty("options",
-                "-c statement_timeout=4000 -c lock_timeout=2500 -c idle_in_transaction_session_timeout=12000");
-        source.setConnectionProperties(properties);
-        source.setUrl("jdbc:postgresql://127.0.0.1:" + store.port + "/" + store.database);
-        source.setUsername(store.user);
-        source.setPassword(password);
+        pool = new B32Pool(store, application, password);
     }
 
     @Override
     public Connection getConnection() throws SQLException {
-        Connection raw = source.getConnection();
+        B32Pool.Lease lease = pool.acquire();
         try {
-            return new CommandConnection(raw).watch();
+            return new CommandConnection(lease).watch();
         } catch (SQLException | RuntimeException failure) {
             try {
-                raw.close();
+                lease.close();
             } catch (SQLException closing) {
                 failure.addSuppressed(closing);
             }
@@ -60,13 +44,21 @@ final class B32DataSource extends AbstractDataSource {
         throw new SQLFeatureNotSupportedException("The fixture uses its provisioned role.");
     }
 
+    @Override
+    public void close() throws SQLException {
+        pool.close();
+    }
+
     private final class CommandConnection {
+        private final B32Pool.Lease lease;
         private final Connection raw;
         private final int backend;
+        private boolean claimed;
         private boolean finalized;
 
-        private CommandConnection(Connection raw) throws SQLException {
-            this.raw = raw;
+        private CommandConnection(B32Pool.Lease lease) throws SQLException {
+            this.lease = lease;
+            raw = lease.connection;
             backend = raw.unwrap(PGConnection.class).getBackendPID();
         }
 
@@ -76,6 +68,10 @@ final class B32DataSource extends AbstractDataSource {
         }
 
         private Object invokeConnection(Object proxy, Method method, Object[] args) throws Throwable {
+            if (method.getName().equals("close")) {
+                lease.close();
+                return null;
+            }
             if (method.getName().equals("commit") && finalized) {
                 gates.hit(Point.BEFORE_COMMIT, backend);
             }
@@ -109,9 +105,15 @@ final class B32DataSource extends AbstractDataSource {
                         Object changed = invoke(statement, method, args);
                         if (Integer.valueOf(1).equals(changed)) {
                             if (after != null) {
+                                claimed = true;
                                 gates.hit(after, backend);
                             }
-                            finalized |= marksFinalized;
+                            if (marksFinalized) {
+                                if (!claimed) {
+                                    throw new SQLException("B32 finalization did not use the claim's JDBC lease.", "XX000");
+                                }
+                                finalized = true;
+                            }
                         }
                         return changed;
                     });

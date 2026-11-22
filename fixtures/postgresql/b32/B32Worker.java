@@ -9,6 +9,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLTimeoutException;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
@@ -32,29 +33,54 @@ public final class B32Worker {
             Path controls = root.resolve("control").toRealPath();
             Path scratch = Files.createDirectory(root.resolve("http"));
             var gates = new B32Gate(controls);
-            var command = new B32DataSource(Store.WORKFLOW, args[1], field(input), gates);
-            var proof = new B32DataSource(Store.PROOF, args[1], field(input), gates);
-            var writer = new WriterEpoch(UUID.fromString(field(input)), Long.parseLong(field(input)));
-            var secrets = new OperationSecrets(1, Map.of(1, secret(input)), 1, Map.of(1, secret(input)));
-            var actors = B08SyntheticScope.actors(field(input), field(input), field(input), field(input));
-            var settings = new SyntheticCreateConfiguration.Settings(command, proof, B08SyntheticScope.POLICY,
-                    writer, actors, () -> clock(controls), secrets);
-            try (var connection = command.getConnection()) {
-                B32Database.read(connection, Store.WORKFLOW).save(controls.resolve("workflow.identity"));
+            try (var command = new B32DataSource(Store.WORKFLOW, args[1], field(input), gates);
+                 var proof = new B32DataSource(Store.PROOF, args[1], field(input), gates)) {
+                var writer = new WriterEpoch(UUID.fromString(field(input)), Long.parseLong(field(input)));
+                var secrets = new OperationSecrets(1, Map.of(1, secret(input)), 1, Map.of(1, secret(input)));
+                var actors = B08SyntheticScope.actors(field(input), field(input), field(input), field(input));
+                var settings = new SyntheticCreateConfiguration.Settings(command, proof, B08SyntheticScope.POLICY,
+                        writer, actors, () -> clock(controls), secrets);
+                verifyPool(command, Store.WORKFLOW, controls, "workflow");
+                verifyPool(proof, Store.PROOF, controls, "proof");
+                var serve = SyntheticHttpMain.class.getDeclaredMethod("serve", int.class, Path.class,
+                        SyntheticCreateConfiguration.Settings.class, BufferedReader.class);
+                serve.setAccessible(true);
+                serve.invoke(null, 0, scratch, settings, input);
             }
-            try (var connection = proof.getConnection()) {
-                B32Database.read(connection, Store.PROOF).save(controls.resolve("proof.identity"));
-            }
-            var serve = SyntheticHttpMain.class.getDeclaredMethod("serve", int.class, Path.class,
-                    SyntheticCreateConfiguration.Settings.class, BufferedReader.class);
-            serve.setAccessible(true);
-            serve.invoke(null, 0, scratch, settings, input);
         } catch (Exception | AssertionError failure) {
             Throwable actual = failure instanceof java.lang.reflect.InvocationTargetException invocation
                     ? invocation.getCause() : failure;
             System.err.println("B32 worker failed (" + actual.getClass().getSimpleName() + ") at "
                     + actual.getStackTrace()[0]);
             System.exit(1);
+        }
+    }
+
+    private static void verifyPool(B32DataSource dataSource, Store store, Path controls, String name) throws Exception {
+        try (var first = dataSource.getConnection(); var second = dataSource.getConnection()) {
+            B32Database identity = B32Database.read(first, store);
+            int peer = Integer.parseInt(B32Database.scalar(second, "SELECT pg_backend_pid()"));
+            if (identity.pid() == peer) {
+                throw new IllegalStateException("Concurrent pool leases shared a backend.");
+            }
+            try (var unexpected = dataSource.getConnection()) {
+                throw new IllegalStateException("B32 pool exceeded its configured capacity.");
+            } catch (SQLTimeoutException expected) {
+                if (!"HYT00".equals(expected.getSQLState())) {
+                    throw expected;
+                }
+            }
+            first.setReadOnly(true);
+            first.setAutoCommit(false);
+            B32Database.scalar(first, "SELECT 1");
+            first.close();
+            try (var reused = dataSource.getConnection()) {
+                if (!B32Database.read(reused, store).equals(identity) || !reused.getAutoCommit() || reused.isReadOnly()) {
+                    throw new IllegalStateException("Expected a reused backend with reset transaction state.");
+                }
+            }
+            identity.save(controls.resolve(name + ".identity"));
+            Files.writeString(controls.resolve(name + ".pool"), identity.pid() + " " + peer);
         }
     }
 

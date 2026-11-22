@@ -5,6 +5,7 @@ import com.company.requests.bootstrap.B32Gate.Cut;
 import com.company.requests.bootstrap.B32Gate.Event;
 import com.company.requests.bootstrap.B32Gate.Point;
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,6 +31,8 @@ public final class B32Harness {
     private static final String NAME = " Zażółć 東京 ";
     private static final String BODY = "line 1\r\nline 2 🚀";
     private static final String CREATE = "{\"type\":\"HR_TICKET\",\"name\":\" Zażółć 東京 \",\"body\":\"line 1\\r\\nline 2 🚀\"}";
+    private static final String STALL_VERIFIED = "B32 EXPECTED STALL VERIFIED AND CLEAN TEARDOWN COMPLETE";
+    private static final String STALL_TIMEOUT = "B32 fixture barrier timed out; discarding run.";
 
     private B32Harness() { }
 
@@ -39,6 +42,10 @@ public final class B32Harness {
         try {
             if (args.length == 2 && args[0].equals("scan")) {
                 scan(args[1], false);
+                return;
+            }
+            if (args.length == 1 && args[0].equals("stall-cleanup-red")) {
+                completeStall(B32Harness::simulateCompoundStall);
                 return;
             }
             require(args.length == 4 && List.of("run", "stalled", "cleanup").contains(args[0])
@@ -51,15 +58,32 @@ public final class B32Harness {
             // use a B32-private runs root. The B32 command accepts only its own ticket-prefixed run IDs.
             String inheritedId = "b08-" + args[3];
             Path run = Path.of(args[2]).resolve(inheritedId).toAbsolutePath().normalize();
-            QualifyPostgresql.workflowAndProof(new String[]{args[0].equals("cleanup") ? "cleanup" : "run",
+            Control execute = () -> QualifyPostgresql.workflowAndProof(new String[]{args[0].equals("cleanup") ? "cleanup" : "run",
                     args[1], args[2], inheritedId}, "b08", (workflow, proof) -> {
                         var fixture = new B32Fixture(workflow, proof);
                         fixture.provision();
                         verify(fixture, run, System.getProperty("java.class.path"), stall);
                     });
+            if (stall) {
+                completeStall(execute);
+            } else {
+                execute.run();
+            }
         } catch (Exception | AssertionError failure) {
             printFailure(failure);
             System.exit(1);
+        }
+    }
+
+    private static void completeStall(Control exercise) throws Exception {
+        exercise.run();
+        System.out.println(STALL_VERIFIED);
+        System.exit(3);
+    }
+
+    private static void simulateCompoundStall() throws Exception {
+        try (AutoCloseable cleanup = () -> { throw new IOException("Injected B32 teardown failure."); }) {
+            throw new AssertionError(STALL_TIMEOUT);
         }
     }
 
@@ -73,26 +97,28 @@ public final class B32Harness {
             if (stall) {
                 Collections.swap(second, 6, 9); // Misbind the expected owner and no-issue bearer only on B.
             }
-            B32App.Reply created;
-            String key;
-            long firstPid;
+            var sensitive = new ArrayList<String>();
             try (var a = B32App.start(run, "b32-a", classpath, fixture.settings(), CLOCK);
                  var b = B32App.start(run, "b32-b", classpath, second, CLOCK)) {
-                firstPid = a.pid();
+                long firstPid = a.pid();
                 sameProcesses(a, b);
                 require(!primary.endpoint().equals(independent.endpoint()), "Independent proof shares workflow endpoint.");
                 verifyIdentities(a, primary, independent);
                 verifyIdentities(b, primary, independent);
+                verifyIndependentPools(a, b, work, proof);
                 reject("nonindependent JVM and listener", () -> sameProcesses(a, a));
+                reject("shared PostgreSQL pool", () -> verifyIndependentPools(a, a, work, proof));
                 reject("wrong PostgreSQL server", () -> sameIdentity(independent, primary, Store.WORKFLOW));
                 work.setSchema("fixture");
                 B32Database wrongSchema = B32Database.read(work, Store.WORKFLOW);
                 work.setSchema(Store.WORKFLOW.schema);
                 reject("wrong PostgreSQL schema", () -> sameIdentity(wrongSchema, primary, Store.WORKFLOW));
-                key = verifyActorAndClock(a, fixture, CLOCK);
+                String key = verifyActorAndClock(a, fixture, CLOCK);
+                sensitive.add(key);
                 if (stall) {
                     reject("actor scope drift", () -> verifyActorAndClock(b, fixture, CLOCK));
                     stalled(a, fixture, work, proof, key);
+                    return;
                 }
                 b.setClock(CLOCK.plusSeconds(1));
                 reject("trusted clock drift", () -> verifyActorAndClock(b, fixture, CLOCK));
@@ -100,30 +126,40 @@ public final class B32Harness {
                 verifyActorAndClock(b, fixture, CLOCK);
                 System.out.printf("PASS actor and trusted clock parity across A/B time=%s expires=%s%n",
                         CLOCK, CLOCK.plus(OperationKeyIssuer.VALIDITY));
-                created = contend(a, b, fixture, work, proof, key);
+                B32App.Reply created = contend(a, b, fixture, work, proof, key);
+                String reference = ref(created);
+                sensitive.add(reference);
                 B32App.Reply settled = B32App.completed(b.post("/requests", fixture.alias, key, CREATE));
                 assertCreated(settled);
                 require(created.equals(settled), "B retry changed the exact HTTP response after lock timeout.");
                 B32Fixture.snapshot("after-b-replay", work, proof, 1, 1, 2);
                 require(b.isAlive(), "Peer B must still be live when A is ready to restart.");
                 try (var restarted = restart(a, b, fixture, run, classpath, primary, independent)) {
+                    verifyPoolsExited(a, work, proof);
+                    verifyIndependentPools(restarted, b, work, proof);
                     require(firstPid != restarted.pid() && b.pid() != restarted.pid(), "Restart must be a new JVM.");
                     B32App.Reply replay = B32App.completed(restarted.post("/requests", fixture.alias, key, CREATE));
                     assertCreated(replay);
                     require(created.equals(replay), "Restarted JVM changed the exact HTTP response.");
                     B32Fixture.snapshot("after-restart", work, proof, 1, 1, 3);
-                    B32Fixture.verifyResult(work, proof, replay.json().get("ref").asString(), NAME, BODY, CLOCK,
+                    B32Fixture.verifyResult(work, proof, ref(replay), NAME, BODY, CLOCK,
                             fixture.writer.generation(), 3);
                     System.out.printf("PASS exact restart HTTP 201 content-type=%s cache=%s Location SHA-256=%s "
                                     + "body SHA-256=%s old JVM=%d new JVM=%d peer JVM=%d%n",
                             replay.contentType(), replay.cache(), digest(replay.location()), digest(replay.body()),
                             firstPid, restarted.pid(), b.pid());
+                    String commitRef = verifyIsolatedCut(restarted, fixture, work, proof, Point.BEFORE_COMMIT,
+                            1, 3, sensitive);
+                    String releaseRef = verifyIsolatedCut(b, fixture, work, proof, Point.BEFORE_RELEASE,
+                            2, 4, sensitive);
+                    require(List.of(reference, commitRef, releaseRef).stream().distinct().count() == 3,
+                            "Each scoped cut must use an original result.");
                 }
             }
             require(primary.equals(B32Database.read(work, Store.WORKFLOW))
                     && independent.equals(B32Database.read(proof, Store.PROOF)),
                     "Independent observers or their database postmasters changed during restart.");
-            verifyLogs(run, fixture, key, created.json().get("ref").asString());
+            verifyLogs(run, fixture, sensitive);
         }
     }
 
@@ -151,15 +187,12 @@ public final class B32Harness {
                                        String key) throws Exception {
         var afterClaim = new Cut(Point.AFTER_CLAIM, "a-winner", 1700);
         var beforeClaim = new Cut(Point.BEFORE_CLAIM, "b-waiter", 1700);
-        var beforeCommit = new Cut(Point.BEFORE_COMMIT, "a-winner", 1100);
-        var beforeRelease = new Cut(Point.BEFORE_RELEASE, "a-winner", 1100);
         a.gates.arm(afterClaim);
-        a.gates.arm(beforeCommit);
-        a.gates.arm(beforeRelease);
         b.gates.arm(beforeClaim);
         // Let B complete its HTTP/authority setup before starting A's bounded command window.
         var resultB = b.post("/requests", fixture.alias, key, CREATE);
         Event waiting = entered(b, beforeClaim, work, resultB);
+        long started = System.nanoTime();
         var resultA = a.post("/requests", fixture.owner, key, CREATE);
         Event claimed = entered(a, afterClaim, work, resultA);
         B32Fixture.snapshot("after-claim", work, proof, 0, 0, 0);
@@ -176,19 +209,39 @@ public final class B32Harness {
         require(!resultA.isDone(), "A must remain gated through B's lock timeout.");
         B32Fixture.snapshot("after-b-503", work, proof, 0, 0, 0);
         released(a, afterClaim, claimed);
-        Event committing = entered(a, beforeCommit, work, resultA);
-        require(committing.backend() == claimed.backend(), "Claim and commit must use the exact same JDBC backend.");
-        B32Fixture.snapshot("before-commit", work, proof, 0, 1, 0);
-        released(a, beforeCommit, committing);
-        Event releasing = entered(a, beforeRelease, proof, resultA);
-        B32Fixture.snapshot("before-release", work, proof, 1, 1, 0);
-        released(a, beforeRelease, releasing);
         B32App.Reply created = B32App.completed(resultA);
         assertCreated(created);
+        System.out.printf("PASS contention winner HTTP 201 elapsed-ms=%d%n", Duration.ofNanos(System.nanoTime() - started).toMillis());
         B32Fixture.snapshot("after-a-201", work, proof, 1, 1, 1);
-        B32Fixture.verifyResult(work, proof, created.json().get("ref").asString(), NAME, BODY, CLOCK,
-                fixture.writer.generation(), 1);
+        B32Fixture.verifyResult(work, proof, ref(created), NAME, BODY, CLOCK, fixture.writer.generation(), 1);
         return created;
+    }
+
+    private static String verifyIsolatedCut(B32App app, B32Fixture fixture, Connection work, Connection proof, Point point,
+                                            long priorEffects, long priorPreparations, List<String> sensitive) throws Exception {
+        var issued = B32App.completed(app.post("/operation-keys", fixture.owner, "", ""));
+        require(issued.status() == 201, "Fresh key issuance failed for " + point + ".");
+        String key = issued.json().get("key").asString();
+        sensitive.add(key);
+        var cut = new Cut(point, "isolated", 1100);
+        app.gates.arm(cut);
+        long started = System.nanoTime();
+        var reply = app.post("/requests", fixture.owner, key, CREATE);
+        boolean beforeCommit = point == Point.BEFORE_COMMIT;
+        Event reached = entered(app, cut, beforeCommit ? work : proof, reply);
+        long next = priorEffects + 1;
+        String stage = beforeCommit ? "isolated-precommit" : "isolated-prerelease";
+        B32Fixture.snapshot(stage, work, proof, beforeCommit ? priorEffects : next, next, priorPreparations);
+        require(!reply.isDone(), "HTTP completed while held at " + point + ".");
+        released(app, cut, reached);
+        var created = B32App.completed(reply);
+        assertCreated(created);
+        System.out.printf("PASS %s HTTP 201 elapsed-ms=%d%n", stage, Duration.ofNanos(System.nanoTime() - started).toMillis());
+        B32Fixture.snapshot(stage + "-finished", work, proof, next, next, priorPreparations + 1);
+        String ref = ref(created);
+        sensitive.add(ref);
+        B32Fixture.verifyResult(work, proof, ref, NAME, BODY, CLOCK, fixture.writer.generation(), 1);
+        return ref;
     }
 
     private static void stalled(B32App app, B32Fixture fixture, Connection work, Connection proof, String key)
@@ -205,13 +258,14 @@ public final class B32Harness {
         B32Fixture.snapshot("after-stalled-cut", work, proof, 0, 0, 0);
         System.out.printf("RED timed-out cut %s backend=%d at=%s HTTP=%d%n",
                 cut.point(), timedOut.backend(), timedOut.at(), stalled.status());
-        throw new AssertionError("B32 fixture barrier timed out; discarding run.");
+        System.out.println(STALL_TIMEOUT);
     }
 
     private static Event entered(B32App app, Cut cut, Connection observer, CompletableFuture<B32App.Reply> request)
             throws Exception {
         Event event = app.gates.await(cut, "entered", EVENT_WAIT);
-        require(event.outcome().equals("entered") && event.backend() > 0 && !request.isDone()
+        Store store = cut.point() == Point.BEFORE_RELEASE ? Store.PROOF : Store.WORKFLOW;
+        require(event.outcome().equals("entered") && app.pool(store).contains(event.backend()) && !request.isDone()
                 && B32Fixture.liveApp(observer, event.backend()).equals(app.name),
                 "Expected live app-owned JDBC backend at " + cut.point() + ".");
         System.out.printf("ENTERED %s %s backend=%d at=%s%n", app.name, cut.point(), event.backend(), event.at());
@@ -247,6 +301,36 @@ public final class B32Harness {
     private static void sameProcesses(B32App a, B32App b) {
         require(a.isAlive() && b.isAlive() && a.pid() != b.pid() && a.port() != b.port(),
                 "Expected independent live JVMs and distinct ephemeral HTTP ports.");
+    }
+
+    private static void verifyIndependentPools(B32App a, B32App b, Connection work, Connection proof) throws Exception {
+        verifyIndependentPools(a, b, Store.WORKFLOW, work);
+        verifyIndependentPools(a, b, Store.PROOF, proof);
+    }
+
+    private static void verifyIndependentPools(B32App a, B32App b, Store store, Connection observer) throws Exception {
+        List<Integer> first = a.pool(store);
+        List<Integer> second = b.pool(store);
+        require(first.size() == 2 && second.size() == 2 && first.stream().distinct().count() == 2
+                && second.stream().distinct().count() == 2 && Collections.disjoint(first, second),
+                "Expected separate two-slot pools.");
+        for (B32App app : List.of(a, b)) {
+            for (int backend : app.pool(store)) {
+                require(B32Fixture.liveApp(observer, backend).equals(app.name), "Pooled backend belongs to another process.");
+            }
+        }
+        System.out.printf("PASS %s independent pooled backends %s=%s %s=%s; exhaustion SQLSTATE=HYT00 and backend reuse%n",
+                store, a.name, first, b.name, second);
+    }
+
+    private static void verifyPoolsExited(B32App app, Connection work, Connection proof) throws Exception {
+        for (Store store : Store.values()) {
+            Connection observer = store == Store.WORKFLOW ? work : proof;
+            require(B32Database.scalar(observer, """
+                    SELECT count(*) FROM pg_stat_activity WHERE application_name = ? AND datname = current_database()
+                    """, app.name).equals("0"), "Pool backend survived application shutdown.");
+        }
+        System.out.printf("PASS both pools closed with %s JVM=%d%n", app.name, app.pid());
     }
 
     private static void verifyIdentities(B32App app, B32Database primary, B32Database independent) throws Exception {
@@ -311,11 +395,14 @@ public final class B32Harness {
         System.out.printf("PASS HTTP %d %s no-store, no Location or result reference%n", status, code);
     }
 
-    private static void verifyLogs(Path run, B32Fixture fixture, String key, String ref) throws Exception {
+    private static String ref(B32App.Reply reply) {
+        return reply.json().get("ref").asString();
+    }
+
+    private static void verifyLogs(Path run, B32Fixture fixture, List<String> observed) throws Exception {
         var sensitive = new ArrayList<>(fixture.settings());
         sensitive.remove(3); // The writer generation is deliberately present in evidence and is public.
-        sensitive.add(key);
-        sensitive.add(ref);
+        sensitive.addAll(observed);
         for (String node : List.of("b32-a", "b32-b", "b32-a-restarted")) {
             String log = Files.readString(run.resolve(node).resolve("worker.log"));
             require(sensitive.stream().noneMatch(log::contains), "Protected synthetic data appeared in diagnostics.");

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)] [ValidateSet('Build', 'Compile', 'Leak', 'Stalled', 'Run', 'Cleanup')] [string] $Action,
+    [Parameter(Mandatory)] [ValidateSet('Build', 'Compile', 'Leak', 'Stalled', 'StallCleanupRed', 'Run', 'Cleanup')]
+    [string] $Action,
     [Parameter(Mandatory)] [string] $Workspace,
     [Parameter(Mandatory)] [string] $Scratch,
     [ValidatePattern('^b32-[a-z0-9-]{1,27}$')] [string] $RunId = 'b32-local'
@@ -71,6 +72,11 @@ function Confirm-PackagedApp([string[]] $artifacts, [bool] $http, [string] $name
         Set-Content -LiteralPath (Join-Path $logs "$name-artifact-scan.log")
 }
 
+function Test-StallCompletion([int] $exit, [string] $log) {
+    return ($exit -eq 3 -and
+        (Select-String -LiteralPath $log -Pattern '^B32 EXPECTED STALL VERIFIED AND CLEAN TEARDOWN COMPLETE$'))
+}
+
 Push-Location -LiteralPath $repo
 try {
     if ($Action -in 'Build', 'Compile') {
@@ -121,6 +127,20 @@ try {
         Write-Output 'PASS release artifact leak control rejected the injected fixture class with exit 1.'
         return
     }
+    if ($Action -eq 'StallCleanupRed') {
+        $log = Join-Path $logs "$RunId-stall-cleanup-red.log"
+        if (Test-Path -LiteralPath $log) { throw 'Use a new B32 run ID.' }
+        & $java -cp $classpath B32Harness stall-cleanup-red *> $log
+        $exit = $LASTEXITCODE
+        Get-Content -LiteralPath $log
+        if ($exit -ne 1 -or (Test-StallCompletion $exit $log) -or
+            -not (Select-String -LiteralPath $log -SimpleMatch 'B32 fixture barrier timed out; discarding run.') -or
+            -not (Select-String -LiteralPath $log -SimpleMatch 'B32 additional failure (IOException)')) {
+            throw 'Compound stall and cleanup failure control did not exercise the failure classification.'
+        }
+        Write-Output 'PASS compound stall and cleanup failure rejected.'
+        return
+    }
     $actionName = $Action.ToLowerInvariant()
     $log = Join-Path $logs "$RunId-$actionName.log"
     if (Test-Path -LiteralPath $log) { throw 'Use a new B32 run ID.' }
@@ -128,10 +148,10 @@ try {
     $exit = $LASTEXITCODE
     Get-Content -LiteralPath $log
     if ($Action -eq 'Stalled') {
-        if ($exit -ne 1 -or -not (Select-String -LiteralPath $log -SimpleMatch 'B32 fixture barrier timed out; discarding run.')) {
-            throw 'Stall control failed to reject the run.'
+        if (-not (Test-StallCompletion $exit $log)) {
+            throw 'Expected stalled barrier and clean teardown were not both confirmed.'
         }
-        Write-Output 'PASS stalled B32 fixture run was discarded with exit 1.'
+        Write-Output 'PASS stalled B32 fixture run was discarded after clean teardown.'
     } elseif ($exit -ne 0) {
         throw "B32 $actionName failed, see $log."
     }

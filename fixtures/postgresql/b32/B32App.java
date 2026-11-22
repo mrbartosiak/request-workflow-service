@@ -86,6 +86,11 @@ final class B32App implements AutoCloseable {
         return B32Database.load(root.resolve("control").resolve(store.name().toLowerCase(java.util.Locale.ROOT) + ".identity"));
     }
 
+    List<Integer> pool(Store store) throws Exception {
+        Path marker = root.resolve("control").resolve(store.name().toLowerCase(java.util.Locale.ROOT) + ".pool");
+        return java.util.Arrays.stream(Files.readString(marker).split(" ")).map(Integer::valueOf).toList();
+    }
+
     boolean isAlive() {
         return process.isAlive();
     }

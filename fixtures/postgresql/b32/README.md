@@ -14,13 +14,15 @@ $fixture = './fixtures/postgresql/b32/Run-B32.ps1'
 
 & $fixture @b32 -Action Build
 & $fixture @b32 -Action Leak -RunId b32-leak-01
+& $fixture @b32 -Action StallCleanupRed -RunId b32-stall-red-01
 & $fixture @b32 -Action Stalled -RunId b32-stall-01
 & $fixture @b32 -Action Run -RunId b32-green-01
+& $fixture @b32 -Action Run -RunId b32-green-02
 ~~~
 
 `Build` runs offline default and `synthetic-http` clean verification, checks the packaged JARs and compiles the harness into the private scratch launcher. `Compile` refreshes the harness against an already built `synthetic-http` profile in the same checkout. `Leak` inserts a fixture class into a private control JAR and requires the runtime classpath scan to reject it. The JAR used for the leak control belongs only to that command.
 
-`Stalled` and `Run` require local IPv4 socket access by the launched processes. Each needs a fresh run ID. A connection-restricted shell can stop during PostgreSQL readiness. The expected stall discards the run with a child exit of 1, after observing the bounded latch expiry, sanitized HTTP 500, zero workflow/proof effects and normal process teardown. The PowerShell command exits successfully when that negative result is observed.
+`Stalled` and `Run` require local IPv4 socket access by the launched processes. Each needs a fresh run ID. A connection-restricted shell can stop during PostgreSQL readiness. For the expected stall, Java observes the bounded latch expiry, sanitized HTTP 500 and zero workflow/proof effects. Only after both app processes and both databases stop cleanly does Java emit the completion marker and exit 3. PowerShell requires that marker and exit code. `StallCleanupRed` simulates a timeout carrying a suppressed teardown exception without opening sockets and confirms the same classifier rejects it.
 
 The B04 helper records its original B08 ownership marker in the B32 scratch runs directory. For interrupted runs, pass the same B32 run ID and scratch to `Cleanup` after confirming port allocation. The cleanup command delegates to B04's owned-process checks.
 
@@ -30,18 +32,20 @@ The B04 helper records its original B08 ownership marker in the B32 scratch runs
 
 ## Evidence
 
-Each application uses its own JVM and nonpooling `DriverManagerDataSource` instances. The fixture links distinct live workflow backends to the app-specific PostgreSQL application names. Startup and restart identities are compared against independent observers using endpoint, database, postmaster start, schema OID and owner, migration history and the packaged migrator hash. The observers have independent observer credentials, default read-only transactions and no application write grants.
+Each application owns one two-slot workflow pool and one two-slot proof pool, built on the qualified pgJDBC pooled connection API. Lease acquisition from a full pool fails within its 200 ms wait budget. At startup the worker holds both leases, checks that a third times out, and verifies that a subsequent lease reuses the released backend with reset transaction state. The parent confirms distinct live backends for A and B and links them to their application names. Startup and restart identities are compared against independent observers using endpoint, database, postmaster start, schema OID and owner, migration history and the packaged migrator hash. The observers have independent observer credentials, default read-only transactions and no application write grants.
 
-The scenario holds B immediately before executing the key claim. A inserts the same claim and pauses. The workflow observer first confirms B's in-flight HTTP call is outside PostgreSQL lock wait, then requires `pg_blocking_pids(B)` to return A's exact backend after B is released. B receives the normal command lock-timeout response, HTTP 503 `outcome_unknown`. A progresses through the commit and release cuts. Workflow and proof observers assert the following visibility at each point.
+The contention scenario holds B immediately before executing the key claim. A inserts the same claim and pauses. The workflow observer first confirms B's in-flight HTTP call is outside PostgreSQL lock wait, then requires `pg_blocking_pids(B)` to return A's exact backend after B is released. B receives the normal command lock-timeout response, HTTP 503 `outcome_unknown`. A returns 201, B replays it, and a restarted A replays it while B stays live. Two further Creates with fresh keys check precommit and prerelease independently. Each request remains under the existing command and release budgets. Workflow and proof observers assert cumulative row counts from all phases.
 
 | Observation | Each workflow record count | Proof reservations | Proof preparations |
 | --- | ---: | ---: | ---: |
 | A claimed, and again after B received 503 | 0 | 0 | 0 |
-| A before workflow commit | 0 | 1 | 0 |
-| A after commit and before release preparation | 1 | 1 | 0 |
 | After A's HTTP 201 | 1 | 1 | 1 |
 | After B's exact retry | 1 | 1 | 2 |
 | After restarted A's exact retry | 1 | 1 | 3 |
+| Fresh Create held before workflow commit | 1 | 2 | 3 |
+| After precommit cut and HTTP 201 | 2 | 2 | 4 |
+| Next fresh Create after commit and before release preparation | 3 | 3 | 4 |
+| After prerelease cut and HTTP 201 | 3 | 3 | 5 |
 
 The exact replay assertion compares the HTTP status, Location, content type, no-store header and body. The database assertion joins the returned reference to the original actor, assignment, UTF-8 fields, trusted occurrence time, finalized receipt, one reservation and the distinct preparations. Logs record hashes of the protected response fields and counts. Private stdin carries credentials to the children and closing it shuts down the owned application. The fixture verifies connection refusal after each JVM exits.
 
