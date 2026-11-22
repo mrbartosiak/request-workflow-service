@@ -23,26 +23,37 @@ final class OriginalPublicationProof {
     void requireHeld(Connection proof, Attempt attempt) {
         observe(proof, attempt, workflow -> {
             try (var query = workflow.prepareStatement("""
-                    SELECT 1 FROM pg_catalog.pg_locks gate
-                    JOIN pg_catalog.pg_locks txn ON txn.pid = gate.pid
+                    WITH held AS MATERIALIZED (
+                        SELECT locktype, database, classid, objid, objsubid, transactionid
+                        FROM pg_catalog.pg_locks
+                        WHERE pid = ? AND granted AND mode = 'ExclusiveLock'
+                    )
+                    SELECT 1 FROM held gate CROSS JOIN held txn
                     JOIN requests.publication_target_evidence r
                       ON r.organization = ? AND r.request_type = ? AND r.ref = ? AND r.state = 'ACCEPTED'
-                    WHERE gate.pid = ? AND gate.locktype = 'advisory' AND gate.granted
-                      AND gate.mode = 'ExclusiveLock' AND gate.classid = 1919250805 AND gate.objid = 16
+                    WHERE gate.locktype = 'advisory' AND gate.classid = 1919250805 AND gate.objid = 16
                       AND gate.objsubid = 2 AND gate.database = (
                           SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
-                      AND txn.locktype = 'transactionid' AND txn.granted AND txn.mode = 'ExclusiveLock'
+                      AND txn.locktype = 'transactionid'
                       AND txn.transactionid::text::numeric = mod(CAST(? AS numeric), 4294967296)
                       AND pg_xact_status(CAST(? AS xid8)) = 'in progress'
                       AND r.revision = ?
+                      AND 8 = (
+                          SELECT count(DISTINCT word.classid)
+                          FROM held word JOIN generate_series(0, 7) AS binding(lane)
+                            ON word.classid = 1919250810 + lane
+                            AND word.objid::bigint = ('x' || substr(?, 1 + lane * 8, 8))::bit(32)::bigint
+                          WHERE word.locktype = 'advisory' AND word.objsubid = 2 AND word.database = gate.database
+                      )
                     """)) {
-                query.setString(1, attempt.organization().value());
-                query.setString(2, attempt.type().name());
-                query.setString(3, attempt.ref().value());
-                query.setInt(4, attempt.backendPid());
+                query.setInt(1, attempt.backendPid());
+                query.setString(2, attempt.organization().value());
+                query.setString(3, attempt.type().name());
+                query.setString(4, attempt.ref().value());
                 query.setString(5, attempt.workflowTransaction());
                 query.setString(6, attempt.workflowTransaction());
                 query.setLong(7, attempt.resultRevision() - 1);
+                query.setString(8, attempt.gateBinding());
                 try (var rows = query.executeQuery()) {
                     if (!rows.next()) {
                         throw new AuthorityUnavailableException();

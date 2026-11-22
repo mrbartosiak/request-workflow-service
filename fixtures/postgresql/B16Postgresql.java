@@ -186,7 +186,13 @@ public final class B16Postgresql {
         var pending = new AtomicReference<Entry>();
         try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
             expect(Rollback.class, () -> inGate(first, attempt -> {
-                pending.set(reserve(attempt, 1));
+                checkFirstRegistration(attempt, second);
+                Entry registered = journal.register(attempt);
+                require(registered.state() == State.REGISTERED && journal.register(attempt).equals(registered),
+                        "the genuine first message and its exact repeat succeed");
+                Entry reserved = journal.reserve(attempt);
+                require(reserved.state() == State.PENDING && number(reserved) == 1, "the genuine attempt burns 1");
+                pending.set(reserved);
                 expect(IllegalStateException.class, () -> gate.acquire(guard, WRITER, first.ref(), first.key()));
                 var competitor = threads.submit(() -> inGate(second, other -> reserve(other, 2)));
                 try {
@@ -209,6 +215,34 @@ public final class B16Postgresql {
                 "first rollback retains the burned publication");
         require(head() == 2, "ordered shared high-water");
         System.out.println("PASS gate waited across organizations and request types, rollback burned 1, following commit got 2");
+    }
+
+    private void checkFirstRegistration(Attempt exact, Target foreign) {
+        requireUnregistered(new Attempt(exact.id(), exact.writer(), foreign.organization(), foreign.type(),
+                foreign.ref(), exact.backendPid(), exact.workflowTransaction(), exact.receiptIdentity(),
+                exact.resultRevision()), "organization, type and target");
+        requireUnregistered(new Attempt(exact.id(), exact.writer(), exact.organization(), exact.type(),
+                exact.ref(), exact.backendPid(), exact.workflowTransaction(), "f".repeat(64),
+                exact.resultRevision()), "receipt identity");
+        requireUnregistered(new Attempt(UUID.randomUUID(), exact.writer(), exact.organization(), exact.type(),
+                exact.ref(), exact.backendPid(), exact.workflowTransaction(), exact.receiptIdentity(),
+                exact.resultRevision()), "attempt ID");
+        require(journal.find(exact).isEmpty() && head() == 0,
+                "substitutions never registered the held attempt or burned an ID");
+        require(journal.activeBinding(exact.writer(), exact.organization(), exact.type(), exact.ref()).isEmpty()
+                        && journal.activeBinding(exact.writer(), foreign.organization(), foreign.type(), foreign.ref()).isEmpty(),
+                "first-message substitutions left both targets unfenced");
+        System.out.println("PASS first registration rejected substituted target, receipt and attempt ID without a burn");
+    }
+
+    private void requireUnregistered(Attempt substitute, String coordinate) {
+        try {
+            journal.register(substitute);
+        } catch (AuthorityUnavailableException expected) {
+            require(journal.find(substitute).isEmpty(), "rejected first registration left no attempt");
+            return;
+        }
+        throw new AssertionError("First registration accepted substituted " + coordinate);
     }
 
     private void lateAndLostReplies() throws Exception {

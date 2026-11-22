@@ -28,10 +28,14 @@ public interface PublicationJournal {
 
     /** Bind a receipt's exact scoped key without copying the key into the independent journal. */
     static String receiptIdentity(ReceiptKey key) {
+        return digest("requests.publication.receipt-key.v1", key.issuer(), key.organization().value(),
+                key.principal(), key.tokenId());
+    }
+
+    private static String digest(String... components) {
         try {
             var digest = MessageDigest.getInstance("SHA-256");
-            for (String component : new String[]{"requests.publication.receipt-key.v1", key.issuer(),
-                    key.organization().value(), key.principal(), key.tokenId()}) {
+            for (String component : components) {
                 byte[] value = ExactOperationText.encode(component, Integer.MAX_VALUE);
                 digest.update(ByteBuffer.allocate(Integer.BYTES).putInt(value.length).array());
                 digest.update(value);
@@ -61,6 +65,14 @@ public interface PublicationJournal {
 
         public String namespace() {
             return PublicationId.INITIAL_NAMESPACE;
+        }
+
+        /** Identify the exact command attested by the still-held publication gate. */
+        public String gateBinding() {
+            return digest("requests.publication.gate-binding.v1", namespace(), id.toString(),
+                    writer.writerId().toString(), Long.toString(writer.generation()), organization.value(),
+                    type.name(), ref.value(), Integer.toString(backendPid), workflowTransaction, receiptIdentity,
+                    Long.toString(resultRevision));
         }
 
         @Override

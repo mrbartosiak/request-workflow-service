@@ -14,6 +14,7 @@ import com.company.requests.application.WriterEpoch;
 import com.company.requests.domain.Action;
 import com.company.requests.domain.RequestRef;
 import com.company.requests.domain.RequestType;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.Objects;
 import java.util.UUID;
@@ -62,13 +63,24 @@ public final class JdbcPublishGate implements PublishGate {
                 throw new AuthorityUnavailableException();
             }
 
-            // This database-wide lock for initial-requests is released by PostgreSQL at transaction end.
-            // The independent observer checks the same two keys on this exact transaction's backend.
+            // The database-wide lock orders all reservations and ends with this transaction.
             jdbc.execute("SELECT pg_advisory_xact_lock(1919250805, 16)");
             var attempt = jdbc.queryForObject("SELECT pg_backend_pid(), pg_current_xact_id()::text",
                     (row, index) -> new Attempt(UUID.randomUUID(), writer, guard.organization(), target.type(), ref,
                             row.getInt(1), row.getString(2), PublicationJournal.receiptIdentity(receipt),
                             target.revision() + 1));
+            // Eight indexed lock words let the independent observer attest the complete digest.
+            // PostgreSQL releases the words and the namespace lock together at transaction end.
+            jdbc.execute("""
+                    SELECT pg_advisory_xact_lock(1919250810 + lane,
+                           ('x' || substr(?, 1 + lane * 8, 8))::bit(32)::integer)
+                    FROM generate_series(0, 7) AS binding(lane)
+                    """, (PreparedStatement statement) -> {
+                statement.setString(1, attempt.gateBinding());
+                statement.execute();
+                return null;
+            });
+
             var held = new Held(workflow, guard, attempt);
             TransactionSynchronizationManager.bindResource(HELD_GATE, held);
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
