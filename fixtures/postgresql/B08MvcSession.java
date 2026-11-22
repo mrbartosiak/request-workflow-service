@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.jdbc.datasource.AbstractDataSource;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.test.web.servlet.MockMvc;
@@ -81,14 +82,18 @@ final class B08MvcSession implements AutoCloseable {
     }
 
     Reply invoke(MockHttpServletRequestBuilder request, String bearer) throws Exception {
+        var response = raw(request, bearer);
+        return new Reply(response.getStatus(), header(response.getHeader(HttpHeaders.LOCATION)),
+                header(response.getHeader(HttpHeaders.CACHE_CONTROL)),
+                header(response.getHeader(HttpHeaders.CONTENT_TYPE)), response.getContentAsString());
+    }
+
+    MockHttpServletResponse raw(MockHttpServletRequestBuilder request, String bearer) throws Exception {
         request.accept(MediaType.APPLICATION_JSON, MediaType.APPLICATION_PROBLEM_JSON);
         if (!bearer.isEmpty()) {
             request.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer);
         }
-        var response = mvc.perform(request).andReturn().getResponse();
-        return new Reply(response.getStatus(), header(response.getHeader(HttpHeaders.LOCATION)),
-                header(response.getHeader(HttpHeaders.CACHE_CONTROL)),
-                header(response.getHeader(HttpHeaders.CONTENT_TYPE)), response.getContentAsString());
+        return mvc.perform(request).andReturn().getResponse();
     }
 
     @Override

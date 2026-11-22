@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.UnaryOperator;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
@@ -62,15 +63,15 @@ public final class B17Postgresql {
 
     private final AtomicReference<Instant> clock = new AtomicReference<>(Instant.parse("2026-11-22T21:00:00Z"));
     private final AtomicInteger preGateChecks = new AtomicInteger();
-    private final String ownerBearer = bearer();
-    private final String publisherBearer = bearer();
+    final String ownerBearer = bearer();
+    final String publisherBearer = bearer();
     private final String publisherAlias = bearer();
     private final DataSource proofOwner;
     private final JdbcTemplate authority;
-    private final JdbcTemplate sql;
-    private final B10Postgresql baseline;
-    private final SyntheticEffectiveAccessConfiguration.Settings settings;
-    private final SyntheticEffectiveAccessConfiguration.Components profile;
+    final JdbcTemplate sql;
+    final B10Postgresql baseline;
+    final SyntheticEffectiveAccessConfiguration.Settings settings;
+    final SyntheticEffectiveAccessConfiguration.Components profile;
     private final Admission scope;
     private final JdbcPublicationJournal journal;
     private final JdbcWorkflowRecords guards;
@@ -80,12 +81,20 @@ public final class B17Postgresql {
                           QualifyPostgresql.SqlConnection projector, QualifyPostgresql.SqlConnection resolver,
                           QualifyPostgresql.SqlConnection createProof, QualifyPostgresql.ReleaseLogins logins,
                           B10FixtureSources sources) throws SQLException {
+        this(workflow, proof, projector, resolver, createProof, logins, sources, UnaryOperator.identity());
+    }
+
+    B17Postgresql(QualifyPostgresql.Connections workflow, QualifyPostgresql.Connections proof,
+                   QualifyPostgresql.SqlConnection projector, QualifyPostgresql.SqlConnection resolver,
+                   QualifyPostgresql.SqlConnection createProof, QualifyPostgresql.ReleaseLogins logins,
+                   B10FixtureSources sources, UnaryOperator<Connection> observeCommand) throws SQLException {
         proofOwner = B08MvcSession.dataSource(proof.migration());
         authority = new JdbcTemplate(proofOwner);
         var workflowOwner = B08MvcSession.dataSource(workflow.migration());
         sql = new JdbcTemplate(workflowOwner);
         var policy = B10Postgresql.policy().withAssigneeOnlyOnPublish(Set.of(SCOPED));
-        baseline = new B10Postgresql(workflow, proof, projector, resolver, createProof, sources, this::observe, policy);
+        baseline = new B10Postgresql(workflow, proof, projector, resolver, createProof, sources,
+                connection -> observeCommand.apply(observe(connection)), policy);
         provision(workflowOwner);
         var base = baseline.settings();
         var actors = new SyntheticActorResolver("b10-issuer", "b10-audience", List.of(
@@ -381,7 +390,7 @@ public final class B17Postgresql {
                 """, Long.class, ref.value()) == 1, "publication applied more than once");
     }
 
-    private PendingConfirmation scopeWitness(RequestRef ref) {
+    PendingConfirmation scopeWitness(RequestRef ref) {
         return sql.queryForObject("""
                 SELECT s.attempt_id, s.sequence, s.after_version
                 FROM requests.scope_authority_witness s
@@ -408,7 +417,7 @@ public final class B17Postgresql {
                 """, Long.class, entry.attempt().id());
     }
 
-    private void confirm(Entry entry) {
+    void confirm(Entry entry) {
         profile.publicationResolver().orElseThrow().confirm(scope, entry.attempt());
     }
 
@@ -439,7 +448,7 @@ public final class B17Postgresql {
         });
     }
 
-    private Entry binding(RequestType type, RequestRef ref) {
+    Entry binding(RequestType type, RequestRef ref) {
         return journal.activeBinding(scope.writer(), OWNER.organization(), type, ref).orElseThrow();
     }
 
@@ -455,7 +464,7 @@ public final class B17Postgresql {
         return sql.queryForObject("SELECT count(*) FROM " + knownTable, Long.class);
     }
 
-    private RequestRef accepted(B08MvcSession mvc, RequestType type) throws Exception {
+    RequestRef accepted(B08MvcSession mvc, RequestType type) throws Exception {
         var created = call(mvc, "/requests", ownerBearer, issue(mvc, ownerBearer),
                 Map.of("type", type.name(), "name", "Exact synthetic name", "body", "Exact synthetic body"));
         require(created.status() == 201, "Create setup failed with " + created.status());
@@ -470,7 +479,7 @@ public final class B17Postgresql {
         return ref;
     }
 
-    private void enable(AuthenticatedActor actor, RequestType type, Grant... permissions) {
+    void enable(AuthenticatedActor actor, RequestType type, Grant... permissions) {
         for (Grant permission : permissions) {
             baseline.confirm(profile.updates().stageEnablement(OPERATOR, new GrantKey(actor, permission, Optional.of(type))));
         }
@@ -484,13 +493,13 @@ public final class B17Postgresql {
         return intent(mvc, ref, publisherBearer);
     }
 
-    private static String issue(B08MvcSession mvc, String bearer) throws Exception {
+    static String issue(B08MvcSession mvc, String bearer) throws Exception {
         var reply = mvc.invoke(new B08MvcSession.Call("/operation-keys", bearer, "", ""));
         require(reply.status() == 201, "key issue setup failed with " + reply.status());
         return JSON.readTree(reply.body()).get("key").asString();
     }
 
-    private static String observation(B08MvcSession mvc, RequestRef ref, String action, String bearer) throws Exception {
+    static String observation(B08MvcSession mvc, RequestRef ref, String action, String bearer) throws Exception {
         var reply = mvc.invoke(MockMvcRequestBuilders.get("/requests/{ref}/action-context", ref.value())
                 .queryParam("action", action), bearer);
         require(reply.status() == 200, "action context setup failed with " + reply.status());
@@ -502,7 +511,7 @@ public final class B17Postgresql {
                 Map.of("expectedRevision", intent.observation()));
     }
 
-    private static B08MvcSession.Reply call(B08MvcSession mvc, String route, String bearer, String key,
+    static B08MvcSession.Reply call(B08MvcSession mvc, String route, String bearer, String key,
                                             Map<String, String> fields) throws Exception {
         return mvc.invoke(new B08MvcSession.Call(route, bearer, key, JSON.writeValueAsString(fields)));
     }

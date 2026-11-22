@@ -8,6 +8,7 @@ import com.company.requests.adapter.http.RestInputValidator;
 import com.company.requests.adapter.http.SyntheticActionContextController;
 import com.company.requests.adapter.http.SyntheticCreateController;
 import com.company.requests.adapter.http.SyntheticRequestActionController;
+import com.company.requests.adapter.http.SyntheticRequestDetailController;
 import com.company.requests.adapter.jdbc.JdbcEffectiveScopeStore;
 import com.company.requests.adapter.jdbc.JdbcPublicationConfirmationStore;
 import com.company.requests.adapter.jdbc.JdbcPublishGate;
@@ -30,6 +31,7 @@ import com.company.requests.application.OperationKeyIssuer;
 import com.company.requests.application.PublicationProof;
 import com.company.requests.application.PublicationProofResolver;
 import com.company.requests.application.RequestActionCommand;
+import com.company.requests.application.RequestDetailQuery;
 import com.company.requests.application.ScopeAuthorityMutation;
 import com.company.requests.application.ScopeProofResolver;
 import com.company.requests.application.SyntheticScopePolicy;
@@ -97,7 +99,7 @@ public class SyntheticEffectiveAccessConfiguration {
     public record Components(CurrentAccess access, CreateCommand create, EffectiveScopeUpdates updates,
                              ScopeProofResolver resolver, Optional<ActionContextService> actionContext,
                              Optional<RequestActionCommand> requestActions,
-                             Optional<PublicationProofResolver> publicationResolver) { }
+                             Optional<PublicationProofResolver> publicationResolver, RequestDetailQuery details) { }
 
     @Bean
     public static Components effectiveScopeComponents(Settings settings) {
@@ -134,8 +136,9 @@ public class SyntheticEffectiveAccessConfiguration {
                         settings.originalObserver()),
                 new JdbcPublicationConfirmationStore(projector),
                 admission -> proof.requireWriter(admission, projectionIdentity.current())));
+        var readRelease = new GuardedRelease(transactions, records, records, access, Duration.ofMillis(2400));
         var contexts = settings.observationKeys().map(keys -> new ActionContextService(access, records, records,
-                new GuardedRelease(transactions, records, records, access, Duration.ofMillis(2400)),
+                readRelease,
                 new ObservationCodec(keys, create.secrets()), create.clock()));
         var actions = contexts.flatMap(context -> create.guardedReplay().map(replay -> {
             var receipts = new JdbcReceiptStore(command);
@@ -148,7 +151,8 @@ public class SyntheticEffectiveAccessConfiguration {
                     store, mutation, release, replay.preparation(), replay.originalReceipts(), publisher);
         }));
         return new Components(access, SyntheticCreateConfiguration.createCommand(create, transactions, records, access),
-                updates, resolver, contexts, actions, publicationResolver);
+                updates, resolver, contexts, actions, publicationResolver,
+                new RequestDetailQuery(access, records, readRelease));
     }
 
     @Bean
@@ -171,5 +175,13 @@ public class SyntheticEffectiveAccessConfiguration {
         var create = settings.create();
         return new SyntheticRequestActionController(create.policy().genesis().organization(), create.actors(),
                 inputs, components.requestActions());
+    }
+
+    @Bean
+    SyntheticRequestDetailController syntheticRequestDetailController(Settings settings, Components components,
+                                                                      RestInputValidator inputs) {
+        var create = settings.create();
+        return new SyntheticRequestDetailController(create.policy().genesis().organization(), create.actors(),
+                inputs, components.details());
     }
 }

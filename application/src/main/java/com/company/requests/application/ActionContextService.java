@@ -60,7 +60,7 @@ public final class ActionContextService {
     /** Stage guarded response bytes before returning control to the transport. */
     public byte[] release(AuthenticatedActor actor, RequestRef ref, Action action, Function<Reply, byte[]> encode) {
         requireExistingAction(action);
-        var slot = ReleaseBuffer.actionContext();
+        var slot = ReleaseBuffer.requestRead();
         var issuedAt = new AtomicReference<Instant>();
         GuardedRelease.Outcome outcome;
         try {

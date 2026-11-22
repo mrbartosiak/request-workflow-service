@@ -15,7 +15,7 @@ public final class ReleaseBuffer {
         this(capacity, MAX_BYTES);
     }
 
-    static ReleaseBuffer actionContext() {
+    static ReleaseBuffer requestRead() {
         // A 16 KiB body can require six output bytes per input byte when JSON escapes controls.
         int capacity = 128 * 1024;
         return new ReleaseBuffer(capacity, capacity);
