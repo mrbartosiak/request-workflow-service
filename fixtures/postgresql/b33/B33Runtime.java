@@ -43,6 +43,12 @@ public final class B33Runtime {
 
     public static void serve(Path scratch, SyntheticEffectiveAccessConfiguration.Settings settings,
                              BufferedReader input) throws Exception {
+        serve(scratch, settings, input, new RequestEvidenceRecorder(Clock.systemUTC(),
+                event -> System.out.println("request_evidence " + event.json())));
+    }
+
+    public static void serve(Path scratch, SyntheticEffectiveAccessConfiguration.Settings settings,
+                             BufferedReader input, RequestEvidenceRecorder evidence) throws Exception {
         var connector = new Connector(Http11NioProtocol.class.getName());
         connector.setPort(0);
         connector.setScheme("http");
@@ -61,8 +67,6 @@ public final class B33Runtime {
         var engine = new StandardEngine();
         engine.setName("B33");
         engine.setDefaultHost("127.0.0.1");
-        var evidence = new RequestEvidenceRecorder(Clock.systemUTC(),
-                event -> System.out.println("request_evidence " + event.json()));
         engine.getPipeline().addValve(new SyntheticConnectorEvidence(evidence));
         service.setContainer(engine);
         var host = new StandardHost();

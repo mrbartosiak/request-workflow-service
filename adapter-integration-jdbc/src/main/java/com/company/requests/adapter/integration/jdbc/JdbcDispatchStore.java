@@ -13,6 +13,7 @@ import com.company.requests.domain.RequestRef;
 import com.company.requests.integration.DispatchCoordinator;
 import com.company.requests.integration.DispatchCoordinator.Result;
 import com.company.requests.integration.DispatchScheduler;
+import com.company.requests.integration.OutboundEvidenceRecorder;
 import com.company.requests.integration.SyntheticDelivery;
 import com.company.requests.integration.SyntheticDelivery.Action;
 import com.company.requests.integration.SyntheticDelivery.Connector;
@@ -28,6 +29,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -138,8 +140,11 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
         return claimScheduledBatch(writer, DispatchScheduler.BATCH_SIZE);
     }
 
-    private List<Claim> claimScheduledBatch(WriterEpoch writer, int maximum) {
+    public List<Claim> claimScheduledBatch(WriterEpoch writer, int maximum) {
         Objects.requireNonNull(writer);
+        if (maximum < 1 || maximum > DispatchScheduler.BATCH_SIZE) {
+            throw new IllegalArgumentException("Invalid scheduled dispatch batch size.");
+        }
         return scheduledSession(() -> transaction(() -> {
             recoverExpired();
             return scheduling.claimBatch(writer, maximum, this::persistClaim);
@@ -147,10 +152,16 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
     }
 
     public Result dispatchScheduled(Claim claim, WriterEpoch writer, Connector connector) {
+        return dispatchScheduled(claim, writer, connector, null, Map.of());
+    }
+
+    public Result dispatchScheduled(Claim claim, WriterEpoch writer, Connector connector,
+                                    OutboundEvidenceRecorder evidence,
+                                    Map<String, OutboundEvidenceRecorder.Destination> aliases) {
         var unrecorded = new AtomicReference<UUID>();
         try {
             return scheduledSession(() -> scheduling.dispatch(claim,
-                    owner -> dispatchInvocation(claim, writer, connector, owner, unrecorded)));
+                    owner -> dispatchInvocation(claim, writer, connector, evidence, aliases, owner, unrecorded)));
         } catch (RuntimeException | Error failure) {
             var owner = unrecorded.get();
             if (owner != null) {
@@ -165,12 +176,16 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
         }
     }
 
-    private Result dispatchInvocation(Claim claim, WriterEpoch writer, Connector connector, UUID owner,
-                                      AtomicReference<UUID> unrecorded) {
+    private Result dispatchInvocation(Claim claim, WriterEpoch writer, Connector connector,
+                                      OutboundEvidenceRecorder evidence,
+                                      Map<String, OutboundEvidenceRecorder.Destination> aliases,
+                                      UUID owner, AtomicReference<UUID> unrecorded) {
         var timed = new TimedSyntheticDelivery(connector);
         Result result;
         try {
-            result = new DispatchCoordinator(this, writer, timed).dispatch(claim);
+            var coordinator = evidence == null ? new DispatchCoordinator(this, writer, timed)
+                    : new DispatchCoordinator(this, writer, timed, evidence, aliases);
+            result = coordinator.dispatch(claim);
         } catch (RuntimeException | Error failure) {
             try {
                 recordAfterClose(timed, claim, owner, unrecorded);
@@ -246,6 +261,15 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
                     .orElseGet(() -> withhold(claim, State.DEFERRED, ArmState.DEFERRED)))
                     .orElseGet(() -> withheld(ArmState.STALE));
         });
+    }
+
+    @Override
+    public boolean defer(Claim claim) {
+        if (scheduling != null && !scheduling.hasPermit(claim)) {
+            return false;
+        }
+        return transaction(() -> lockActive(claim, State.CLAIMED).isPresent()
+                && withhold(claim, State.DEFERRED, ArmState.DEFERRED).state() == ArmState.DEFERRED);
     }
 
     @Override

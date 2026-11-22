@@ -3,6 +3,7 @@ package com.company.requests.adapter.http;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.company.requests.application.evidence.RequestEvidenceEvent.Direction;
@@ -10,6 +11,7 @@ import com.company.requests.application.evidence.RequestEvidenceEvent.Destinatio
 import com.company.requests.application.evidence.RequestEvidenceEvent.Operation;
 import com.company.requests.application.evidence.RequestEvidenceEvent.Outcome;
 import com.company.requests.application.evidence.RequestEvidenceRecorder;
+import com.company.requests.application.evidence.RequestEvidenceStorage;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,7 +29,7 @@ public final class RequestEvidenceFilter extends OncePerRequestFilter {
     }
 
     public static boolean handled(HttpServletRequest request) {
-        return request.getAttribute(STATE) instanceof State;
+        return request.getAttribute(STATE) != null;
     }
 
     static UUID problem(HttpServletRequest request, Outcome outcome) {
@@ -41,7 +43,15 @@ public final class RequestEvidenceFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        var state = new State(recorder.start(Direction.INGRESS, operation(request), Destination.REQUESTS_API));
+        Operation operation = operation(request);
+        var admitted = admit(operation);
+        if (admitted.isEmpty()) {
+            request.setAttribute(STATE, Boolean.TRUE);
+            RestProblems.write(response, RestProblems.Code.EVIDENCE_UNAVAILABLE, recorder.rejectIngress(operation),
+                    request.getMethod().equals("HEAD"));
+            return;
+        }
+        var state = new State(admitted.orElseThrow());
         request.setAttribute(STATE, state);
         boolean escaped = true;
         try {
@@ -55,8 +65,31 @@ public final class RequestEvidenceFilter extends OncePerRequestFilter {
             if (escaped && status < 400 && !response.isCommitted()) {
                 status = 0;
             }
-            state.attempt.finish(state.outcome != null ? state.outcome : statusOutcome(status), status);
+            try {
+                state.attempt.finish(state.outcome != null ? state.outcome : statusOutcome(status), status);
+            } catch (RequestEvidenceStorage.Unavailable unavailable) {
+                if (!escaped && !response.isCommitted()) {
+                    response.reset();
+                    RestProblems.write(response, terminalGap(operation), state.attempt.correlationId(),
+                            request.getMethod().equals("HEAD"));
+                }
+            }
         }
+    }
+
+    private Optional<RequestEvidenceRecorder.Attempt> admit(Operation operation) {
+        try {
+            return recorder.tryStart(Direction.INGRESS, operation, Destination.REQUESTS_API);
+        } catch (RequestEvidenceStorage.Unavailable unavailable) {
+            return Optional.empty();
+        }
+    }
+
+    private static RestProblems.Code terminalGap(Operation operation) {
+        return switch (operation) {
+            case CREATE_REQUEST, APPLY_REQUEST_ACTION, EDIT_REQUEST_BODY -> RestProblems.Code.OUTCOME_UNKNOWN;
+            default -> RestProblems.Code.EVIDENCE_UNAVAILABLE;
+        };
     }
 
     private static Operation operation(HttpServletRequest request) {
@@ -64,10 +97,34 @@ public final class RequestEvidenceFilter extends OncePerRequestFilter {
         if (path.isEmpty()) {
             path = request.getRequestURI();
         }
+        return switch (request.getMethod()) {
+            case "GET", "HEAD" -> readOperation(path);
+            case "POST" -> postOperation(path);
+            case "PATCH" -> path.matches("/requests/[^/]+/body") ? Operation.EDIT_REQUEST_BODY
+                    : Operation.UNMATCHED_HTTP;
+            default -> Operation.UNMATCHED_HTTP;
+        };
+    }
+
+    private static Operation readOperation(String path) {
+        if (path.equals("/requests")) {
+            return Operation.BROWSE_REQUESTS;
+        }
+        if (path.matches("/requests/[^/]+/history")) {
+            return Operation.READ_HISTORY;
+        }
+        if (path.matches("/requests/[^/]+/action-context")) {
+            return Operation.READ_ACTION_CONTEXT;
+        }
+        return path.matches("/requests/[^/]+") ? Operation.READ_REQUEST : Operation.UNMATCHED_HTTP;
+    }
+
+    private static Operation postOperation(String path) {
         return switch (path) {
             case "/requests" -> Operation.CREATE_REQUEST;
             case "/operation-keys" -> Operation.ISSUE_OPERATION_KEY;
-            default -> Operation.UNMATCHED_HTTP;
+            default -> path.matches("/requests/[^/]+/actions/(verify|accept|delete|reject|publish)")
+                    ? Operation.APPLY_REQUEST_ACTION : Operation.UNMATCHED_HTTP;
         };
     }
 

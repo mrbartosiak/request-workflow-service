@@ -4,9 +4,9 @@ import com.company.requests.application.WriterEpoch;
 import com.company.requests.integration.DispatchStore.Claim;
 import com.company.requests.integration.DispatchStore.Invocation;
 import com.company.requests.integration.DispatchStore.Receipt;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.function.BiFunction;
 
 /** Drives the durable local dispatch protocol for a configured synthetic destination. */
 public final class DispatchCoordinator {
@@ -22,23 +22,49 @@ public final class DispatchCoordinator {
 
     private final DispatchStore store;
     private final WriterEpoch writer;
-    private final BiFunction<Claim, Invocation, Result> delivery;
+    @FunctionalInterface
+    private interface Delivery {
+        Result send(Claim claim, Invocation invocation, OutboundEvidenceRecorder.Reservation reservation);
+    }
+
+    private final Delivery delivery;
+    private final OutboundEvidenceRecorder evidence;
+    private final Map<String, OutboundEvidenceRecorder.Destination> aliases;
 
     public DispatchCoordinator(DispatchStore store, WriterEpoch writer, SyntheticRecorder recorder) {
         this.store = Objects.requireNonNull(store);
         this.writer = Objects.requireNonNull(writer);
         Objects.requireNonNull(recorder);
-        delivery = (claim, invocation) -> record(store, recorder, claim, invocation);
+        delivery = (claim, invocation, reservation) -> record(store, recorder, claim, invocation);
+        evidence = null;
+        aliases = Map.of();
     }
 
     public DispatchCoordinator(SyntheticDelivery.Store store, WriterEpoch writer, SyntheticDelivery.Connector connector) {
         this.store = Objects.requireNonNull(store);
         this.writer = Objects.requireNonNull(writer);
         Objects.requireNonNull(connector);
-        delivery = (claim, invocation) -> send(store, connector, claim, invocation);
+        delivery = (claim, invocation, reservation) -> send(store, claim, invocation, connector::sendWithThrottle);
+        evidence = null;
+        aliases = Map.of();
+    }
+
+    public DispatchCoordinator(SyntheticDelivery.Store store, WriterEpoch writer, TimedSyntheticDelivery connector,
+                               OutboundEvidenceRecorder evidence,
+                               Map<String, OutboundEvidenceRecorder.Destination> aliases) {
+        this.store = Objects.requireNonNull(store);
+        this.writer = Objects.requireNonNull(writer);
+        Objects.requireNonNull(connector);
+        this.evidence = Objects.requireNonNull(evidence);
+        this.aliases = Map.copyOf(aliases);
+        delivery = (claim, invocation, reservation) -> send(store, claim, invocation,
+                call -> connector.sendWithThrottle(call, reservation));
     }
 
     public Result dispatchNext() {
+        if (evidence != null && !evidence.available()) {
+            return Result.DEFERRED;
+        }
         return store.claim(writer).map(this::dispatch).orElse(Result.IDLE);
     }
 
@@ -47,20 +73,31 @@ public final class DispatchCoordinator {
         if (!writer.equals(claim.writer())) {
             return Result.STALE;
         }
+        if (evidence == null) {
+            return arm(claim, null);
+        }
+        var alias = aliases.get(claim.id().effect().destination());
+        try (var reservation = alias == null ? null : evidence.reserve(alias).orElse(null)) {
+            return reservation == null ? (store.defer(claim) ? Result.DEFERRED : Result.STALE)
+                    : arm(claim, reservation);
+        }
+    }
+
+    private Result arm(Claim claim, OutboundEvidenceRecorder.Reservation reservation) {
         var arm = store.arm(claim);
         return switch (arm.state()) {
             case DEFERRED -> Result.DEFERRED;
             case SUPPRESSED -> Result.SUPPRESSED;
             case STALE -> Result.STALE;
-            case ARMED -> invoke(claim, arm.invocation().orElseThrow());
+            case ARMED -> invoke(claim, arm.invocation().orElseThrow(), reservation);
         };
     }
 
-    private Result invoke(Claim claim, Invocation invocation) {
+    private Result invoke(Claim claim, Invocation invocation, OutboundEvidenceRecorder.Reservation reservation) {
         if (!claim.id().equals(invocation.id())) {
             throw new IllegalStateException("Armed invocation does not match the claim.");
         }
-        return delivery.apply(claim, invocation);
+        return delivery.send(claim, invocation, reservation);
     }
 
     private static Result record(DispatchStore store, SyntheticRecorder recorder, Claim claim, Invocation invocation) {
@@ -76,11 +113,11 @@ public final class DispatchCoordinator {
         return receipt.isPresent() ? Result.CONFIRMED : Result.UNKNOWN;
     }
 
-    private static Result send(SyntheticDelivery.Store store, SyntheticDelivery.Connector connector, Claim claim,
-                               Invocation invocation) {
+    private static Result send(SyntheticDelivery.Store store, Claim claim, Invocation invocation,
+                               java.util.function.Function<Invocation, SyntheticDelivery.SendResult> connector) {
         SyntheticDelivery.SendResult report;
         try {
-            var delivery = connector.sendWithThrottle(invocation);
+            var delivery = connector.apply(invocation);
             report = new SyntheticDelivery.SendResult(SyntheticDelivery.exact(invocation, delivery.evidence()),
                     delivery.retryAfter());
         } catch (RuntimeException ambiguous) {

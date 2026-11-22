@@ -18,6 +18,7 @@ import com.company.requests.application.OutboundObligation;
 import com.company.requests.application.PolicyGuard;
 import com.company.requests.application.PublicationProof;
 import com.company.requests.application.ScopeAuthority.Admission;
+import com.company.requests.application.evidence.RequestEvidenceRecorder;
 import com.company.requests.domain.OrganizationId;
 import com.company.requests.domain.RequestType;
 import com.company.requests.integration.DispatchCoordinator;
@@ -26,9 +27,12 @@ import com.company.requests.integration.DispatchScheduler;
 import com.company.requests.integration.DispatchStore;
 import com.company.requests.integration.DispatchStore.AttemptId;
 import com.company.requests.integration.DeliveryReconciler;
+import com.company.requests.integration.OutboundEvidenceRecorder;
+import com.company.requests.integration.OutboundEvidenceRecorder.Destination;
 import com.company.requests.integration.SyntheticDelivery;
 import com.company.requests.integration.SyntheticDelivery.Connector;
 import com.company.requests.integration.TimedSyntheticDelivery;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
@@ -68,15 +72,28 @@ public final class SyntheticDispatchConfiguration {
         private final com.company.requests.application.WriterEpoch writer;
         private final Connector connector;
         private final DispatchScheduler scheduler;
+        private final OutboundEvidenceRecorder evidence;
+        private final Map<String, Destination> aliases;
 
         private ScheduledWorker(DispatchWorkerConnections connections, JdbcDispatchStore store,
-                                com.company.requests.application.WriterEpoch writer, Connector connector) {
+                                com.company.requests.application.WriterEpoch writer, Connector connector,
+                                ProtectedEvidenceSpool spool, Map<String, Destination> aliases) {
             this.connections = connections;
             this.store = store;
             this.writer = writer;
             this.connector = connector;
-            scheduler = new DispatchScheduler(() -> store.claimScheduledBatch(writer), claim ->
-                    store.dispatchScheduled(claim, writer, connector));
+            this.aliases = aliases;
+            if (spool == null) {
+                evidence = null;
+                scheduler = new DispatchScheduler(() -> store.claimScheduledBatch(writer),
+                        claim -> store.dispatchScheduled(claim, writer, connector));
+            } else {
+                evidence = new OutboundEvidenceRecorder(new RequestEvidenceRecorder(Clock.systemUTC(), spool));
+                scheduler = new DispatchScheduler(() -> {
+                    int limit = spool.workerBatchLimit(DispatchScheduler.BATCH_SIZE);
+                    return limit == 0 ? List.of() : store.claimScheduledBatch(writer, limit);
+                }, claim -> store.dispatchScheduled(claim, writer, connector, evidence, aliases));
+            }
         }
 
         public DispatchScheduler.Snapshot snapshot() {
@@ -85,8 +102,21 @@ public final class SyntheticDispatchConfiguration {
 
         public DeliveryReconciler.Result recover(AuthenticatedActor operator, AttemptId attempt,
                                                   SyntheticDelivery.Action action) {
+            if (evidence == null) {
+                return recover(operator, attempt, action, null);
+            }
+            var alias = aliases.get(attempt.effect().destination());
+            try (var reservation = alias == null ? null : evidence.reserveLookup(alias).orElse(null)) {
+                return reservation == null ? DeliveryReconciler.Result.WITHHELD
+                        : recover(operator, attempt, action, reservation);
+            }
+        }
+
+        private DeliveryReconciler.Result recover(AuthenticatedActor operator, AttemptId attempt,
+                                                   SyntheticDelivery.Action action,
+                                                   OutboundEvidenceRecorder.Reservation reservation) {
             return store.scheduledSession(() -> {
-                try (var timed = new TimedSyntheticDelivery(connector)) {
+                try (var timed = new TimedSyntheticDelivery(connector, reservation)) {
                     return new DeliveryReconciler(store, writer, timed).recover(operator, attempt, action);
                 }
             });
@@ -131,10 +161,35 @@ public final class SyntheticDispatchConfiguration {
                                            DataSource remote, Collection<Route> routes,
                                            Map<String, SyntheticDelivery.Contract> contracts,
                                            Function<JdbcSyntheticConnector, Connector> fixtureControl) {
+        return scheduledWorker(settings, worker, authorityReader, remote, routes, contracts, fixtureControl,
+                null, Map.of());
+    }
+
+    public static ScheduledWorker protectedScheduledWorker(SyntheticEffectiveAccessConfiguration.Settings settings,
+                                                           ConnectionPoolDataSource worker, DataSource authorityReader,
+                                                           DataSource remote, Collection<Route> routes,
+                                                           Map<String, SyntheticDelivery.Contract> contracts,
+                                                           ProtectedEvidenceSpool spool,
+                                                           Map<String, Destination> aliases) {
+        return scheduledWorker(settings, worker, authorityReader, remote, routes, contracts, connector -> connector,
+                Objects.requireNonNull(spool), aliases);
+    }
+
+    static ScheduledWorker scheduledWorker(SyntheticEffectiveAccessConfiguration.Settings settings,
+                                           ConnectionPoolDataSource worker, DataSource authorityReader,
+                                           DataSource remote, Collection<Route> routes,
+                                           Map<String, SyntheticDelivery.Contract> contracts,
+                                           Function<JdbcSyntheticConnector, Connector> fixtureControl,
+                                           ProtectedEvidenceSpool spool, Map<String, Destination> aliases) {
         if (worker == authorityReader || worker == settings.create().command()) {
             throw new IllegalArgumentException("Scheduled delivery requires a dedicated worker connection pool.");
         }
         checkRemote(settings, worker, authorityReader, remote, routes, contracts);
+        var safeAliases = Map.copyOf(aliases);
+        if (spool != null && (!safeAliases.keySet().equals(contracts.keySet())
+                || Set.copyOf(safeAliases.values()).size() != safeAliases.size())) {
+            throw new IllegalArgumentException("Protected scheduled delivery requires a distinct safe alias per route.");
+        }
         var connector = new JdbcSyntheticConnector(remote, contracts, DispatchScheduler.IO_TIMEOUT);
         var connections = new DispatchWorkerConnections(worker);
         try {
@@ -142,7 +197,7 @@ public final class SyntheticDispatchConfiguration {
                     DispatchScheduler.MIN_JITTER, connector.endpoint(), settings.effectivePolicy().genesis().organization());
             store.enrollScheduledRoutes();
             return new ScheduledWorker(connections, store, settings.create().writer(),
-                    Objects.requireNonNull(fixtureControl.apply(connector)));
+                    Objects.requireNonNull(fixtureControl.apply(connector)), spool, safeAliases);
         } catch (RuntimeException failure) {
             connections.close();
             throw failure;

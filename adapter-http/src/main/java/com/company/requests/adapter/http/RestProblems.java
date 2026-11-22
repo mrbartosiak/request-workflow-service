@@ -1,11 +1,14 @@
 package com.company.requests.adapter.http;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 import com.company.requests.application.evidence.RequestEvidenceEvent.Outcome;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -31,6 +34,8 @@ public final class RestProblems {
         THROTTLED(HttpStatus.TOO_MANY_REQUESTS, "throttled", "Too many requests", Outcome.THROTTLED),
         AUTHORITY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "authority_unavailable", "Authority unavailable",
                 Outcome.AUTHORITY_UNAVAILABLE),
+        EVIDENCE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "evidence_unavailable", "Evidence unavailable",
+                Outcome.EVIDENCE_UNAVAILABLE),
         OUTCOME_UNKNOWN(HttpStatus.SERVICE_UNAVAILABLE, "outcome_unknown", "Outcome unknown", Outcome.OUTCOME_UNKNOWN),
         ILLEGAL_STATE(HttpStatus.CONFLICT, "illegal_state", "Illegal state", Outcome.ILLEGAL_STATE),
         STALE_OBSERVATION(HttpStatus.CONFLICT, "stale_observation", "Stale observation", Outcome.STALE_OBSERVATION),
@@ -72,6 +77,18 @@ public final class RestProblems {
         problem.setInstance(URI.create("urn:uuid:" + correlationId));
         problem.setProperty("correlationId", correlationId);
         return problem;
+    }
+
+    static void write(HttpServletResponse response, Code code, UUID correlation, boolean head) throws IOException {
+        var problem = create(code, correlation.toString());
+        response.setStatus(problem.getStatus());
+        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+        response.setHeader(HttpHeaders.CACHE_CONTROL, NO_STORE);
+        if (!head) {
+            response.getWriter().write(String.format(Locale.ROOT,
+                    "{\"type\":\"%s\",\"title\":\"%s\",\"status\":%d,\"instance\":\"%s\",\"correlationId\":\"%s\"}",
+                    problem.getType(), problem.getTitle(), problem.getStatus(), problem.getInstance(), correlation));
+        }
     }
 
     public static ResponseEntity<ProblemDetail> response(Code code) {

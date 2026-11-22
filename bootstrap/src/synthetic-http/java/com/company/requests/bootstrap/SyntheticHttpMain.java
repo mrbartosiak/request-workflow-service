@@ -18,6 +18,8 @@ import java.util.Base64;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
@@ -42,8 +44,9 @@ public final class SyntheticHttpMain {
     private SyntheticHttpMain() { }
 
     public static void main(String[] args) {
-        if (args.length != 2) {
-            System.err.println("Usage: SyntheticHttpMain <port (0 for automatic)> <empty scratch directory>");
+        if (args.length != 2 && args.length != 4) {
+            System.err.println("Usage: SyntheticHttpMain <port (0 for automatic)> <empty scratch directory>"
+                    + " [<private spool directory> <private sink directory>]");
             System.exit(2);
         }
         // The packaged standalone profile uses JUL for both Spring and Tomcat. Its default
@@ -61,15 +64,65 @@ public final class SyntheticHttpMain {
                     throw new IllegalArgumentException("An empty HTTP scratch directory is required.");
                 }
             }
-            serve(port, scratch, settings(input), input);
+            var settings = settings(input);
+            if (args.length == 4) {
+                serveProtected(port, scratch, settings, input, Path.of(args[2]), Path.of(args[3]), secret(input));
+            } else {
+                serve(port, scratch, settings, input);
+            }
         } catch (Exception failure) {
             System.err.println("Synthetic HTTP application failed (" + failure.getClass().getSimpleName() + ").");
             System.exit(1);
         }
     }
 
+    private static void serveProtected(int port, Path scratch, SyntheticCreateConfiguration.Settings settings,
+                                       BufferedReader input, Path spoolDirectory, Path sinkDirectory, byte[] key)
+            throws Exception {
+        if (Files.isSameFile(spoolDirectory, sinkDirectory) || Files.isSameFile(scratch, spoolDirectory)
+                || Files.isSameFile(scratch, sinkDirectory)) {
+            throw new IllegalArgumentException("The protected spool, sink and HTTP scratch must be separate.");
+        }
+        try (var spool = ProtectedEvidenceSpool.open(spoolDirectory, key);
+             var sink = new ProtectedLocalEvidenceSink(sinkDirectory, key);
+             var drain = Executors.newSingleThreadScheduledExecutor(
+                     Thread.ofPlatform().daemon().name("synthetic-evidence-drain").factory())) {
+            drain.scheduleWithFixedDelay(new Runnable() {
+                private ProtectedEvidenceSpool.Snapshot previous;
+
+                @Override
+                public void run() {
+                    spool.drain(sink, ProtectedEvidenceSpool.MAX_DRAIN_FRAMES);
+                    var current = spool.snapshot();
+                    if (previous == null || pressureChanged(previous, current)) {
+                        System.out.println("evidence_spool " + current);
+                    }
+                    previous = current;
+                }
+            }, 0, 250, TimeUnit.MILLISECONDS);
+            serve(port, scratch, settings, input, new RequestEvidenceRecorder(Clock.systemUTC(), spool));
+        }
+    }
+
+    private static boolean pressureChanged(ProtectedEvidenceSpool.Snapshot old,
+                                           ProtectedEvidenceSpool.Snapshot current) {
+        return old.alert() != current.alert() || old.restricted() != current.restricted()
+                || old.resuming() != current.resuming() || old.stopRouting() != current.stopRouting()
+                || old.ingressGaps() != current.ingressGaps() || old.outboundGaps() != current.outboundGaps()
+                || old.gapStateDurable() != current.gapStateDurable()
+                || (old.sinkFailures() == 0) != (current.sinkFailures() == 0)
+                || (old.spoolFailures() == 0) != (current.spoolFailures() == 0);
+    }
+
     private static void serve(int port, Path scratch, SyntheticCreateConfiguration.Settings settings,
                               BufferedReader input) throws Exception {
+        var evidence = new RequestEvidenceRecorder(Clock.systemUTC(),
+                event -> System.out.println("request_evidence " + event.json()));
+        serve(port, scratch, settings, input, evidence);
+    }
+
+    private static void serve(int port, Path scratch, SyntheticCreateConfiguration.Settings settings,
+                              BufferedReader input, RequestEvidenceRecorder evidence) throws Exception {
         var connector = new Connector(Http11NioProtocol.class.getName());
         connector.setPort(port);
         connector.setScheme("http");
@@ -88,8 +141,6 @@ public final class SyntheticHttpMain {
         var engine = new StandardEngine();
         engine.setName("B08");
         engine.setDefaultHost("127.0.0.1");
-        var evidence = new RequestEvidenceRecorder(Clock.systemUTC(),
-                event -> System.out.println("request_evidence " + event.json()));
         engine.getPipeline().addValve(new SyntheticConnectorEvidence(evidence));
         service.setContainer(engine);
         var host = new StandardHost();

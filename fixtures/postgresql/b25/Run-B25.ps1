@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)] [ValidateSet('Build', 'Compile', 'PortFree', 'Run', 'Cleanup')] [string] $Action,
     [Parameter(Mandatory)] [string] $Workspace,
     [Parameter(Mandatory)] [string] $Scratch,
-    [ValidatePattern('^b25-[a-z0-9-]{1,24}$')] [string] $RunId = 'b25-local'
+    [ValidatePattern('^b25-[a-z0-9-]{1,24}$')] [string] $RunId = 'b25-local',
+    [switch] $B42Protected
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +34,9 @@ function Confirm-Isolation([string] $profile) {
     foreach ($artifact in $artifacts) {
         $archive = [IO.Compression.ZipFile]::OpenRead($artifact)
         try {
-            if ($archive.Entries.Name -match '^B25.*[.]class$') { throw "Private B25 class leaked into $profile." }
+            if ($archive.Entries.Name -match '^B(25|42).*[.]class$') {
+                throw "Private B25/B42 class leaked into $profile."
+            }
             if ($archive.Entries.FullName -contains 'db/integration/outbox_scheduling_v1.sql') { $migration = $true }
         } finally {
             $archive.Dispose()
@@ -75,7 +78,7 @@ try {
             Get-Content -LiteralPath $log
             throw 'Private B25 launcher failed to compile.'
         }
-        $inputs = @($classpath -split ';') + @($shared) + @($privateFiles)
+        $inputs = @($classpath -split ';') + @($shared) + @($privateFiles) + @($PSCommandPath)
         $hashes = @(Get-FileHash -Algorithm SHA256 -LiteralPath $inputs | Select-Object Hash, Path)
         @{ runtime = "$launcher;$classpath"; checkout = $checkout; inputs = $hashes } |
             ConvertTo-Json -Compress | Set-Content -LiteralPath $manifest
@@ -93,11 +96,23 @@ try {
         }
     }
     $options = @('-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8', '-cp', $built.runtime)
+    if ($B42Protected) {
+        $options = @('-Drequests.b42.protected=true') + $options
+    }
     if ($Action -eq 'PortFree') {
         & $java @options 'B25PortFree' *> $log
         $exit = $LASTEXITCODE
         if ($exit -eq 0) {
             & $java @options 'B25Occupancy' *>> $log
+            $exit = $LASTEXITCODE
+        }
+        if ($exit -eq 0 -and $B42Protected) {
+            & $java @options 'B42ListenerEntryProbe' *>> $log
+            $exit = $LASTEXITCODE
+        }
+        if ($exit -eq 0 -and $B42Protected) {
+            $probeDirectory = Join-Path $Scratch ("$RunId-telemetry")
+            & $java @options 'com.company.requests.bootstrap.B42TelemetryProbe' $probeDirectory *>> $log
             $exit = $LASTEXITCODE
         }
     } else {

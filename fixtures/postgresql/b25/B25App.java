@@ -38,7 +38,9 @@ final class B25App implements AutoCloseable {
         var control = Files.createDirectory(root.resolve("control"));
         var log = root.resolve("worker.log");
         var java = Path.of(System.getProperty("java.home"), "bin", "java.exe");
-        var process = new ProcessBuilder(java.toString(), "-cp", System.getProperty("java.class.path"),
+        var process = new ProcessBuilder(java.toString(),
+                "-Drequests.b42.protected=" + Boolean.getBoolean("requests.b42.protected"),
+                "-cp", System.getProperty("java.class.path"),
                 B25Worker.class.getName(), root.toString(), name).redirectErrorStream(true)
                 .redirectOutput(log.toFile()).start();
         try {
@@ -105,6 +107,10 @@ final class B25App implements AutoCloseable {
 
     long pid() {
         return process.pid();
+    }
+
+    Path control() {
+        return control;
     }
 
     int port() {

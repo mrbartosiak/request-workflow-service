@@ -1,6 +1,7 @@
 package com.company.requests.integration;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.company.requests.application.evidence.RequestEvidenceRecorder;
@@ -12,7 +13,12 @@ import com.company.requests.application.evidence.RequestEvidenceEvent.Outcome;
 public final class OutboundEvidenceRecorder {
     public enum Destination {
         FAKE_ALPHA(com.company.requests.application.evidence.RequestEvidenceEvent.Destination.FAKE_ALPHA),
-        FAKE_BETA(com.company.requests.application.evidence.RequestEvidenceEvent.Destination.FAKE_BETA);
+        FAKE_BETA(com.company.requests.application.evidence.RequestEvidenceEvent.Destination.FAKE_BETA),
+        FAKE_GAMMA(com.company.requests.application.evidence.RequestEvidenceEvent.Destination.FAKE_GAMMA),
+        FAKE_DELTA(com.company.requests.application.evidence.RequestEvidenceEvent.Destination.FAKE_DELTA),
+        FAKE_EPSILON(com.company.requests.application.evidence.RequestEvidenceEvent.Destination.FAKE_EPSILON),
+        FAKE_ZETA(com.company.requests.application.evidence.RequestEvidenceEvent.Destination.FAKE_ZETA),
+        FAKE_ETA(com.company.requests.application.evidence.RequestEvidenceEvent.Destination.FAKE_ETA);
 
         private final com.company.requests.application.evidence.RequestEvidenceEvent.Destination alias;
 
@@ -23,6 +29,8 @@ public final class OutboundEvidenceRecorder {
 
     public enum Result {
         CONFIRMED(Outcome.DELIVERY_CONFIRMED),
+        ACCEPTED(Outcome.DELIVERY_ACCEPTED),
+        LOOKUP_COMPLETED(Outcome.DELIVERY_LOOKUP_COMPLETED),
         REJECTED(Outcome.DELIVERY_REJECTED),
         UNKNOWN(Outcome.DELIVERY_UNKNOWN),
         TIMEOUT(Outcome.DELIVERY_TIMEOUT),
@@ -43,6 +51,39 @@ public final class OutboundEvidenceRecorder {
 
     public Attempt start(Destination destination) {
         return new Attempt(recorder.start(Direction.EGRESS, Operation.VENDOR_SEND, destination.alias));
+    }
+
+    public boolean available() {
+        return recorder.available(Direction.EGRESS);
+    }
+
+    public Optional<Reservation> reserve(Destination destination) {
+        return reserve(Operation.VENDOR_SEND, destination);
+    }
+
+    public Optional<Reservation> reserveLookup(Destination destination) {
+        return reserve(Operation.VENDOR_LOOKUP, destination);
+    }
+
+    private Optional<Reservation> reserve(Operation operation, Destination destination) {
+        return recorder.reserve(Direction.EGRESS, operation, destination.alias).map(Reservation::new);
+    }
+
+    public static final class Reservation implements AutoCloseable {
+        private final RequestEvidenceRecorder.ReservedAttempt reserved;
+
+        private Reservation(RequestEvidenceRecorder.ReservedAttempt reserved) {
+            this.reserved = reserved;
+        }
+
+        public Attempt start() {
+            return new Attempt(reserved.start());
+        }
+
+        @Override
+        public void close() {
+            reserved.close();
+        }
     }
 
     public static final class Attempt {

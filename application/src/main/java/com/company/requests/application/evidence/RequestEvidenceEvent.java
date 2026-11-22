@@ -10,9 +10,14 @@ public record RequestEvidenceEvent(Instant at, UUID correlationId, Direction dir
                                    int status) {
     public enum Direction { INGRESS, EGRESS }
 
-    public enum Operation { CREATE_REQUEST, ISSUE_OPERATION_KEY, UNMATCHED_HTTP, VENDOR_SEND }
+    public enum Operation {
+        CREATE_REQUEST, ISSUE_OPERATION_KEY, BROWSE_REQUESTS, READ_REQUEST, READ_HISTORY, READ_ACTION_CONTEXT,
+        EDIT_REQUEST_BODY, APPLY_REQUEST_ACTION, UNMATCHED_HTTP, VENDOR_SEND, VENDOR_LOOKUP
+    }
 
-    public enum Destination { REQUESTS_API, FAKE_ALPHA, FAKE_BETA }
+    public enum Destination {
+        REQUESTS_API, FAKE_ALPHA, FAKE_BETA, FAKE_GAMMA, FAKE_DELTA, FAKE_EPSILON, FAKE_ZETA, FAKE_ETA
+    }
 
     public enum Phase { START, ERROR, OUTCOME }
 
@@ -32,6 +37,7 @@ public record RequestEvidenceEvent(Instant at, UUID correlationId, Direction dir
         ACTION_DENIED(Stage.APPLICATION, "The action was denied."),
         THROTTLED(Stage.APPLICATION, "The request was throttled."),
         AUTHORITY_UNAVAILABLE(Stage.APPLICATION, "Authorization evidence was unavailable."),
+        EVIDENCE_UNAVAILABLE(Stage.BOUNDARY, "Service admission was restricted to protect request evidence."),
         OUTCOME_UNKNOWN(Stage.APPLICATION, "A durable request outcome could not be established."),
         ILLEGAL_STATE(Stage.APPLICATION, "The current state did not allow the action."),
         STALE_OBSERVATION(Stage.APPLICATION, "The supplied observation was stale."),
@@ -44,6 +50,8 @@ public record RequestEvidenceEvent(Instant at, UUID correlationId, Direction dir
         TRANSPORT_FAILURE(Stage.TRANSPORT, "The HTTP transport failed during request processing."),
         TRANSPORT_TIMEOUT(Stage.TRANSPORT, "The HTTP transport timed out."),
         DELIVERY_CONFIRMED(Stage.DELIVERY, "Outbound delivery was confirmed.", false),
+        DELIVERY_ACCEPTED(Stage.DELIVERY, "The destination accepted the outbound attempt.", false),
+        DELIVERY_LOOKUP_COMPLETED(Stage.DELIVERY, "The synthetic destination returned a delivery observation.", false),
         DELIVERY_REJECTED(Stage.DELIVERY, "The destination rejected the outbound attempt."),
         DELIVERY_UNKNOWN(Stage.DELIVERY, "The outbound outcome could not be established."),
         DELIVERY_TIMEOUT(Stage.DELIVERY, "The outbound attempt timed out."),

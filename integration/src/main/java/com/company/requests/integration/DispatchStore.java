@@ -13,6 +13,11 @@ public interface DispatchStore {
 
     ArmResult arm(Claim claim);
 
+    /** Returns a still-unarmed claim to scheduled work without consuming an outbound attempt. */
+    default boolean defer(Claim claim) {
+        return false;
+    }
+
     /** Record a scoped synthetic receipt or hold the attempt as unknown. */
     boolean finish(Claim claim, Optional<Receipt> receipt);
 

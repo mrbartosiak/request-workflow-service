@@ -4,6 +4,7 @@ import com.company.requests.adapter.integration.jdbc.JdbcSyntheticConnector;
 import com.company.requests.bootstrap.SyntheticDispatchConfiguration.Route;
 import com.company.requests.bootstrap.SyntheticDispatchConfiguration.ScheduledWorker;
 import com.company.requests.bootstrap.SyntheticEffectiveAccessConfiguration.Settings;
+import com.company.requests.integration.OutboundEvidenceRecorder.Destination;
 import com.company.requests.integration.SyntheticDelivery.Connector;
 import com.company.requests.integration.SyntheticDelivery.Contract;
 import java.util.List;
@@ -21,5 +22,13 @@ public final class B25Bootstrap {
                                         Function<JdbcSyntheticConnector, Connector> controls) {
         return SyntheticDispatchConfiguration.scheduledWorker(settings, source, proof, remote, routes,
                 contracts, controls);
+    }
+
+    public static ScheduledWorker startProtected(Settings settings, ConnectionPoolDataSource source, DataSource proof,
+                                                 DataSource remote, List<Route> routes, Map<String, Contract> contracts,
+                                                 Function<JdbcSyntheticConnector, Connector> controls,
+                                                 B42FixtureEvidence evidence, Map<String, Destination> aliases) {
+        return SyntheticDispatchConfiguration.scheduledWorker(settings, source, proof, remote, routes,
+                contracts, controls, evidence.spool(), aliases);
     }
 }

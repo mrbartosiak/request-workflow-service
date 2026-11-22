@@ -1,8 +1,11 @@
+import com.company.requests.bootstrap.B32Gate;
+import com.company.requests.bootstrap.B42FixtureEvidence;
 import com.company.requests.integration.DeliveryReconciler;
 import com.company.requests.integration.DispatchStore.AttemptId;
 import com.company.requests.integration.DispatchStore.EffectKey;
 import com.company.requests.domain.OrganizationId;
 import com.company.requests.domain.RequestRef;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -46,7 +49,8 @@ final class B25Pressure {
         var rest = fixture.base.accepted(fixture.mvc(FAST), B25Postgresql.TYPE);
         var workload = new Workload(rest, stage(fixture, FAST), stage(fixture, THROTTLE),
                 stage(fixture, THROTTLE), stage(fixture, FAST), stage(fixture, RETRY),
-                stage(fixture, FAST), stage(fixture, UNSAFE));
+                stage(fixture, FAST), stage(fixture, UNSAFE),
+                Boolean.getBoolean("requests.b42.protected") ? stage(fixture, FAST) : null);
         return new B25Pressure(fixture, run, workload);
     }
 
@@ -71,7 +75,8 @@ final class B25Pressure {
     }
 
     private record Workload(RequestRef rest, EffectKey fastWhenHeld, EffectKey throttle, EffectKey throttleSibling,
-                            EffectKey fastDuringThrottle, EffectKey retry, EffectKey fastDuringBudget, EffectKey unsafe) { }
+                            EffectKey fastDuringThrottle, EffectKey retry, EffectKey fastDuringBudget, EffectKey unsafe,
+                            EffectKey b42Healthy) { }
 
     void exercise() throws Exception {
         verifyQualifiedCapacity();
@@ -98,6 +103,9 @@ final class B25Pressure {
                         && a.snapshot().failures() == 0 && b.snapshot().failures() == 0,
                         "scheduled instance exceeded its ceiling or encountered worker failures");
                 verifyWorkerPools();
+                if (workload.b42Healthy() != null) {
+                    protectedEvidence(a, b);
+                }
             } finally {
                 events.release();
             }
@@ -107,6 +115,126 @@ final class B25Pressure {
                     OR application_name IN ('b25-a-rest', 'b25-b-rest')
                 """, Integer.class) == 0, "private worker or REST sessions remain after teardown");
         System.out.println("PASS B25 native scheduling, pressure, safe retry and owned worker teardown.");
+    }
+
+    private void protectedEvidence(B25App a, B25App b) throws Exception {
+        long sendsA = sendsBy("a");
+        long sendsB = sendsBy("b");
+        await(() -> evidenceCaughtUp(a, sendsA) && evidenceCaughtUp(b, sendsB),
+                "Prior B25 send evidence had not drained before the B42 fill.");
+        floodWithSinkCut(a);
+        require(a.context(workload.rest(), publisher) == 503, "A admitted REST work above evidence restriction.");
+        await(() -> evidence(a).edge() == 4096 && evidence(a).batch() == 0, "A did not retain its edge reject.");
+        long initiallySentByA = sendsBy("a");
+        due(workload.b42Healthy());
+        await(() -> "CONFIRMED".equals(state(workload.b42Healthy())), "B did not advance at A's evidence restriction.");
+        require(sendsBy("a") == initiallySentByA && b.context(workload.rest(), publisher) == 200,
+                "A sent through restriction or B lost independent REST service.");
+        Files.delete(a.control().resolve(B42FixtureEvidence.CUT));
+        expectEvidenceEmpty(a);
+        require(evidence(a).resumed() && a.context(workload.rest(), publisher) == 200,
+                "A did not resume through the bounded drain.");
+
+        await(() -> evidence(a).ingressOutcomes() == 28, "A did not drain its first resumed request.");
+        expectEvidenceEmpty(a);
+        floodWithSinkCut(a);
+        for (int attempt = 0; attempt <= B42FixtureEvidence.EDGE_FRAMES; attempt++) {
+            require(a.context(workload.rest(), publisher) == 503, "A admitted work while edge capacity was in use.");
+        }
+        await(() -> evidence(a).stopped() && evidence(a).ingressGaps() == 1 && evidence(a).durable(),
+                "Edge exhaustion did not persist the routing stop.");
+        Files.delete(a.control().resolve(B42FixtureEvidence.CUT));
+        expectEvidenceEmpty(a);
+        expectEvidenceEmpty(b);
+        var aState = evidence(a);
+        require(aState.stopped() && aState.batch() == 0 && aState.drain() == B42FixtureEvidence.DRAIN_LIMIT
+                && aState.outboundGaps() == 0 && evidence(b).outboundGaps() == 0,
+                "Routing resumed after a Q-05 gap, or a drain exceeded its budget.");
+        verifyEvidenceCounts(a, b, aState);
+    }
+
+    private void floodWithSinkCut(B25App app) throws Exception {
+        B32Gate.atomic(app.control().resolve(B42FixtureEvidence.CUT), "cut");
+        int admits = B42FixtureEvidence.MAIN_FRAMES * 80 / 100 / 2;
+        for (int request = 0; request < admits; request++) {
+            require(app.context(workload.rest(), publisher) == 200, "A rejected healthy work below spool restriction.");
+        }
+        await(() -> {
+            var state = evidence(app);
+            return state.main() == admits * 2L * 4096 && state.alert() && state.restricted() && state.sinkFailures() > 0;
+        }, "A did not observe isolated sink failure and restricted evidence pressure.");
+    }
+
+    private void verifyEvidenceCounts(B25App a, B25App b, EvidenceState aState) throws IOException {
+        var aLines = Files.readAllLines(a.control().resolve(B42FixtureEvidence.SAFE_TRACE));
+        var bLines = Files.readAllLines(b.control().resolve(B42FixtureEvidence.SAFE_TRACE));
+        require(count(aLines, "\"direction\":\"INGRESS\"", "\"phase\":\"START\"") == 56
+                && count(bLines, "\"direction\":\"INGRESS\"", "\"phase\":\"START\"") == 2,
+                "Native ingress starts did not reconcile with 59 requests and one documented gap.");
+        require(count(aLines, "\"direction\":\"INGRESS\"", "\"phase\":\"OUTCOME\"") == 56
+                && count(bLines, "\"direction\":\"INGRESS\"", "\"phase\":\"OUTCOME\"") == 2
+                && count(aLines, "\"phase\":\"ERROR\"", "\"outcome\":\"EVIDENCE_UNAVAILABLE\"") == 4,
+                "Ingress outcomes or edge errors did not reconcile.");
+        long sends = sendsBy("a") + sendsBy("b");
+        long arms = sql.queryForObject("""
+                SELECT count(*) FROM requests.outbox_attempt WHERE armed_at IS NOT NULL AND destination LIKE 'b25-%'
+                """, Long.class);
+        int remoteEffects = B25Postgresql.CONTRACTS.keySet().stream().mapToInt(this::remoteEffects).sum();
+        for (var phase : List.of("START", "OUTCOME")) {
+            var marker = "\"phase\":\"" + phase + "\"";
+            require(count(aLines, "\"operation\":\"VENDOR_SEND\"", marker) == sendsBy("a")
+                    && count(bLines, "\"operation\":\"VENDOR_SEND\"", marker) == sendsBy("b"),
+                    "Native outbound send evidence did not match the actual fake calls.");
+        }
+        require(arms == sends && count(aLines, "\"phase\":\"OUTCOME\"", "\"outcome\":\"DELIVERY_TIMEOUT\"") == 4,
+                "Durable arm and timeout evidence counts did not match the native gates.");
+        for (var lines : List.of(aLines, bLines)) {
+            require(lines.stream().noneMatch(line -> line.contains(publisher) || line.contains(workload.rest().value())
+                    || line.contains("b25-") || line.contains("action=publish")),
+                    "A protected synthetic value leaked into the safe fixture trace.");
+        }
+        System.out.printf("PASS B42 ingress=59 starts=58 outcomes=58 edge-errors=4 ingress-gaps=%d "
+                        + "fake-sends=%d durable-arms=%d remote-effects=%d timeout-outcomes=4 drain-maximum=%d%n",
+                aState.ingressGaps(), sends, arms, remoteEffects, aState.drain());
+    }
+
+    private static long count(List<String> lines, String first, String second) {
+        return lines.stream().filter(line -> line.contains(first) && line.contains(second)).count();
+    }
+
+    private long sendsBy(String instance) {
+        return events.read().stream().filter(event -> event.process().equals(instance) && event.phase().equals("begin"))
+                .count();
+    }
+
+    private static void expectEvidenceEmpty(B25App app) throws InterruptedException {
+        await(() -> evidence(app).empty(), "The native protected evidence queue did not drain.");
+    }
+
+    private static boolean evidenceCaughtUp(B25App app, long actualSends) {
+        var state = evidence(app);
+        return state.empty() && state.sendOutcomes() == actualSends;
+    }
+
+    private static EvidenceState evidence(B25App app) {
+        try {
+            var fields = B42FixtureEvidence.readState(app.control()).strip().split(" ");
+            return new EvidenceState(Long.parseLong(fields[0]), Long.parseLong(fields[1]), Long.parseLong(fields[2]),
+                    Boolean.parseBoolean(fields[3]), Boolean.parseBoolean(fields[4]), Boolean.parseBoolean(fields[5]),
+                    Boolean.parseBoolean(fields[6]), Long.parseLong(fields[7]), Long.parseLong(fields[8]),
+                    Long.parseLong(fields[9]), Integer.parseInt(fields[10]), Integer.parseInt(fields[11]),
+                    Boolean.parseBoolean(fields[12]), Long.parseLong(fields[13]), Long.parseLong(fields[14]));
+        } catch (IOException failure) {
+            throw new IllegalStateException("Could not read B42 protected evidence metrics.", failure);
+        }
+    }
+
+    private record EvidenceState(long main, long edge, long reserved, boolean alert, boolean restricted, boolean resumed,
+                                 boolean stopped, long ingressGaps, long outboundGaps, long sinkFailures, int batch,
+                                 int drain, boolean durable, long ingressOutcomes, long sendOutcomes) {
+        boolean empty() {
+            return main == 0 && edge == 0 && reserved == 0;
+        }
     }
 
     private void verifyQualifiedCapacity() throws InterruptedException {
@@ -217,6 +345,40 @@ final class B25Pressure {
                 """, Boolean.class, sibling.destination(), sibling.tenant().value(), sibling.effectId(),
                 initial.effectId())), "trusted hint admitted sibling before its shared cooldown");
         System.out.println("PASS trusted cooldown persisted across instances and bounded route resumption.");
+        if (workload.b42Healthy() != null) {
+            settleThrottleBeforeEvidenceCut(initial, sibling);
+        }
+    }
+
+    private void settleThrottleBeforeEvidenceCut(EffectKey initial, EffectKey sibling) throws InterruptedException {
+        // Advance only the original, proved retry's jitter after the unchanged cooldown and sibling checks.
+        sql.update("""
+                UPDATE requests.outbox AS o
+                SET deferred_until = clock_timestamp() - interval '1 second'
+                WHERE o.destination = ? AND o.tenant = ? AND o.effect_id = ? AND o.status = 'RETRYABLE'
+                  AND EXISTS (
+                    SELECT 1 FROM requests.outbox_dispatch_lane l
+                    WHERE l.destination = o.destination AND l.tenant = o.tenant
+                      AND l.resume_at <= clock_timestamp()
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM requests.outbox_attempt a
+                    WHERE a.destination = o.destination AND a.tenant = o.tenant AND a.effect_id = o.effect_id
+                      AND a.attempt_no = o.last_attempt_no AND a.state = 'RETRYABLE'
+                      AND a.delivery_observation IS NOT NULL
+                      AND a.attempt_no = (
+                        SELECT min(first_arm.attempt_no) FROM requests.outbox_attempt first_arm
+                        WHERE first_arm.destination = o.destination AND first_arm.tenant = o.tenant
+                          AND first_arm.effect_id = o.effect_id AND first_arm.armed_at IS NOT NULL
+                      )
+                  )
+                """, B25Postgresql.args(initial));
+        await(() -> "CONFIRMED".equals(state(initial)) && occupied(THROTTLE) == 0,
+                "Original throttle effect did not settle before the B42 fill.");
+        require(armedCount(initial) == 2 && armedCount(sibling) == 1
+                && remoteEffects(initial) == 1 && remoteEffects(sibling) == 1,
+                "Settled throttle effects disagreed with exact arm or remote effect counts.");
+        System.out.println("PASS original throttle retry settled after the cooldown, with exact arms and effects.");
     }
 
     private void retryBudget() throws Exception {
@@ -285,6 +447,13 @@ final class B25Pressure {
         return remote.queryForObject("""
                 SELECT count(*) FROM synthetic_delivery.delivery_attempt WHERE destination = ? AND effect_ref IS NOT NULL
                 """, Integer.class, destination);
+    }
+
+    private int remoteEffects(EffectKey key) {
+        return remote.queryForObject("""
+                SELECT count(*) FROM synthetic_delivery.delivery_attempt
+                WHERE effect_ref IS NOT NULL AND
+                """ + KEY, Integer.class, B25Postgresql.args(key));
     }
 
     private int occupied(String destination) {
