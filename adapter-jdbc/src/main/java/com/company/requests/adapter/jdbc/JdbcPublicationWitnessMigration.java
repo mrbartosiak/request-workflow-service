@@ -1,5 +1,7 @@
 package com.company.requests.adapter.jdbc;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import javax.sql.DataSource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.ConnectionCallback;
@@ -69,6 +71,39 @@ public final class JdbcPublicationWitnessMigration {
                 return null;
             });
             jdbc.update("INSERT INTO requests.publication_schema_migration VALUES (2)");
+            return null;
+        });
+    }
+
+    /** Retains original Publish proof when an eligible live receipt is deleted. */
+    public void migrateReceiptRetirement() {
+        migrateConfirmations();
+        owner.run(() -> {
+            jdbc.execute("SELECT pg_advisory_xact_lock(1919250805, 1)");
+            if (Boolean.TRUE.equals(jdbc.queryForObject("""
+                    SELECT EXISTS (SELECT 1 FROM requests.publication_schema_migration WHERE version = 3)
+                    """, Boolean.class))) {
+                return null;
+            }
+            jdbc.execute("""
+                    ALTER TABLE requests.publication_schema_migration
+                        DROP CONSTRAINT publication_schema_migration_version_check,
+                        ADD CHECK (version IN (1, 2, 3))
+                    """);
+            var resource = new ClassPathResource("db/workflow/publication_receipt_retirement_v3.sql");
+            String script;
+            try (var input = resource.getInputStream()) {
+                script = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            } catch (IOException failure) {
+                throw new IllegalStateException("Could not read the publication receipt retirement migration.", failure);
+            }
+            jdbc.execute((ConnectionCallback<Void>) connection -> {
+                try (var statement = connection.createStatement()) {
+                    statement.execute(script);
+                }
+                return null;
+            });
+            jdbc.update("INSERT INTO requests.publication_schema_migration VALUES (3)");
             return null;
         });
     }
