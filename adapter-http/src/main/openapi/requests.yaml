@@ -1,0 +1,1625 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Request Workflow Service",
+    "version": "0.1.0",
+    "description": "Unversioned HTTP paths. Success JSON uses UTF-8. Requests carrying JSON accept application/json with no charset or UTF-8 and one compatible content encoding. All responses use Cache-Control no-store. JSON input has exact object members and rejects duplicate names and type coercion. Query parameters are single-valued, exact and route-specific. Decoded text is preserved exactly. Empty and Unicode White_Space-only values, U+0000, invalid UTF-8 and unpaired surrogates are rejected. Authority and action-specific field permissions apply to every release. Absolute wire byte bounds are defined by x-utf8MaxBytes and enforced after decoding. Opaque sample tokens are placeholders for values issued by the matching route."
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "paths": {
+    "/operation-keys": {
+      "post": {
+        "operationId": "issueOperationKey",
+        "summary": "Issue an operation key",
+        "description": "Requires KEY_ISSUE. Send an empty body and no query parameters. The response has no request effect. The key is signed, expiring and scoped to the caller.",
+        "responses": {
+          "201": {
+            "description": "Signed key issued",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/IssuedKey"},
+                "examples": {
+                  "issued": {"value": {"key": "opaque-signed-key", "expiresAt": "2026-11-23T10:00:00Z"}}
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "403": {"$ref": "#/components/responses/ActionDenied"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/AuthorityUnavailable"}
+        }
+      }
+    },
+    "/requests": {
+      "post": {
+        "operationId": "createRequest",
+        "summary": "Create a request",
+        "description": "Choose an explicit type. Name and body are preserved exactly. Authorized exact replay uses the original status, result and Location.",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationKey"},
+          {"$ref": "#/components/parameters/ContentEncoding"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CreateInput"},
+              "examples": {
+                "input": {"value": {"type": "HR_TICKET", "name": "  Zażółć gęślą  ", "body": "  Treść العربية 😀  "}}
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created or authorized exact replay",
+            "headers": {
+              "Cache-Control": {"$ref": "#/components/headers/NoStore"},
+              "Location": {"$ref": "#/components/headers/CreateLocation"}
+            },
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/CreateResult"},
+                "examples": {
+                  "created": {
+                    "value": {
+                      "ref": "ABc123_45-aBc123ABc123_45-aBc123",
+                      "action": "create",
+                      "resultRevision": "1",
+                      "state": "CREATED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "409": {"$ref": "#/components/responses/CreateConflict"},
+          "413": {"$ref": "#/components/responses/RequestTooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/MutationUnavailable"}
+        }
+      },
+      "get": {
+        "operationId": "browseRequests",
+        "summary": "Browse authorized requests",
+        "description": "Send an empty body. Names compare case-sensitive exact UTF-8. Supplied filters combine with AND. Pages traverse live authorized membership by descending creation epoch, ordinal and reference. A continuation is present only when the guarded lookahead found another currently visible match.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "description": "Exact decoded name.",
+            "schema": {"$ref": "#/components/schemas/Name"}
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "Exact current lifecycle state.",
+            "schema": {"$ref": "#/components/schemas/RequestState"}
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "description": "ASCII decimal integer from 1 through 50. Leading zeros are accepted. Defaults to 10.",
+            "schema": {"type": "string", "pattern": "^0*(?:[1-9]|[1-4][0-9]|50)$", "default": "10"}
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque encrypted cursor. Repeat equal effective filters and size. Invalid, expired or mismatched cursors require a fresh browse.",
+            "schema": {"$ref": "#/components/schemas/Cursor"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An authorized page",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/BrowsePage"},
+                "examples": {
+                  "published": {
+                    "value": {
+                      "items": [
+                        {
+                          "ref": "publish-ref",
+                          "type": "HR_TICKET",
+                          "name": "  Zażółć gęślą  ",
+                          "state": "PUBLISHED",
+                          "publicationId": "9223372036854775807"
+                        }
+                      ]
+                    }
+                  },
+                  "empty": {
+                    "value": {
+                      "items": []
+                    }
+                  },
+                  "deleted": {"value": {"items": [{"ref": "delete-ref", "state": "DELETED"}]}},
+                  "publicationWithoutState": {
+                    "value": {
+                      "items": [{"ref": "publish-ref", "publicationId": "9223372036854775807"}],
+                      "nextCursor": "opaque-cursor"
+                    }
+                  },
+                  "maskedContinuation": {
+                    "value": {
+                      "items": [{"ref": "publish-ref"}],
+                      "nextCursor": "opaque-cursor"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/AuthorityUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "get": {
+        "operationId": "getRequest",
+        "summary": "Read request detail",
+        "description": "Send an empty body and no query parameters. Only currently permitted fields appear. Fields withheld by access or retention are omitted. Deleted metadata omits revision. A disclosable Publish with unresolved proof defers.",
+        "responses": {
+          "200": {
+            "description": "Current shape for the caller's field grants",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/RequestView"},
+                "examples": {
+                  "published": {
+                    "value": {
+                      "ref": "publish-ref",
+                      "type": "HR_TICKET",
+                      "name": "  Zażółć gęślą  ",
+                      "state": "PUBLISHED",
+                      "publicationId": "9223372036854775807",
+                      "body": "  Treść العربية 😀  ",
+                      "revision": "9007199254740993"
+                    }
+                  },
+                  "masked": {"value": {"ref": "publish-ref"}},
+                  "publicationWithoutState": {
+                    "value": {"ref": "publish-ref", "publicationId": "9223372036854775807"}
+                  },
+                  "deleted": {"value": {"ref": "delete-ref", "state": "DELETED"}}
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/AuthorityUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}/action-context": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "get": {
+        "operationId": "getActionContext",
+        "summary": "Read context for an action",
+        "description": "Send an empty body and one action. The action-specific material field and opaque observation require current permission and eligibility. Only this route issues an observation for a new intent.",
+        "parameters": [
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "description": "One action for which the caller needs an observation.",
+            "schema": {"$ref": "#/components/schemas/ContextAction"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current permitted decision context",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/ActionContext"},
+                "examples": {
+                  "edit": {
+                    "value": {
+                      "ref": "edit-ref",
+                      "action": "edit",
+                      "state": "CREATED",
+                      "context": {"body": "  Treść العربية 😀  "},
+                      "expectedRevision": "opaque-observation"
+                    }
+                  },
+                  "verify": {
+                    "value": {
+                      "ref": "edit-ref",
+                      "action": "verify",
+                      "state": "CREATED",
+                      "context": {"body": "  Treść العربية 😀  "},
+                      "expectedRevision": "opaque-observation"
+                    }
+                  },
+                  "accept": {
+                    "value": {
+                      "ref": "verify-ref",
+                      "action": "accept",
+                      "state": "VERIFIED",
+                      "context": {"body": "  Treść العربية 😀  "},
+                      "expectedRevision": "opaque-observation"
+                    }
+                  },
+                  "reject": {
+                    "value": {
+                      "ref": "verify-ref",
+                      "action": "reject",
+                      "state": "VERIFIED",
+                      "context": {"name": "  Zażółć gęślą  "},
+                      "expectedRevision": "opaque-observation"
+                    }
+                  },
+                  "delete": {
+                    "value": {
+                      "ref": "edit-ref",
+                      "action": "delete",
+                      "state": "CREATED",
+                      "context": {"name": "  Zażółć gęślą  "},
+                      "expectedRevision": "opaque-observation"
+                    }
+                  },
+                  "publish": {
+                    "value": {
+                      "ref": "accept-ref",
+                      "action": "publish",
+                      "state": "ACCEPTED",
+                      "context": {"name": "  Zażółć gęślą  "},
+                      "expectedRevision": "opaque-observation"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "403": {"$ref": "#/components/responses/ActionDenied"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "409": {"$ref": "#/components/responses/IllegalState"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/AuthorityUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}/body": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "patch": {
+        "operationId": "editRequestBody",
+        "summary": "Edit the request body",
+        "description": "Replace the body using an observation from Edit context. Edits preserve lifecycle state.",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationKey"},
+          {"$ref": "#/components/parameters/ContentEncoding"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/EditInput"},
+              "examples": {
+                "input": {"value": {"body": "  Treść العربية 😀  ", "expectedRevision": "opaque-observation"}}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed Edit or authorized exact replay",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/EditResult"},
+                "examples": {
+                  "edited": {
+                    "value": {
+                      "ref": "edit-ref",
+                      "action": "edit",
+                      "resultRevision": "9007199254740993",
+                      "state": "CREATED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "403": {"$ref": "#/components/responses/ActionDenied"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "409": {"$ref": "#/components/responses/ActionConflict"},
+          "413": {"$ref": "#/components/responses/RequestTooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedPatchMedia"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/MutationUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}/history": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "get": {
+        "operationId": "getRequestHistory",
+        "summary": "Read masked lifecycle history",
+        "description": "Send an empty body and no query parameters. Requires the distinct history grant. History remains in sequence order. It omits state-preserving edits, actor, reason, body and occurrence time.",
+        "responses": {
+          "200": {
+            "description": "Currently permitted lifecycle facts",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/RequestHistory"},
+                "examples": {
+                  "created": {
+                    "value": {
+                      "ref": "edit-ref",
+                      "changes": [{"sequence": 1, "action": "create", "from": null, "to": "CREATED"}]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/AuthorityUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}/actions/verify": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "post": {
+        "operationId": "verifyRequest",
+        "summary": "Verify the request",
+        "description": "Verify the request using a Verify observation.",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationKey"},
+          {"$ref": "#/components/parameters/ContentEncoding"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/TransitionInput"},
+              "examples": {
+                "input": {"value": {"expectedRevision": "opaque-observation"}}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed Verify or authorized exact replay",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/VerifyResult"},
+                "examples": {
+                  "verify": {
+                    "value": {
+                      "ref": "verify-ref",
+                      "action": "verify",
+                      "resultRevision": "9007199254740993",
+                      "state": "VERIFIED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "403": {"$ref": "#/components/responses/ActionDenied"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "409": {"$ref": "#/components/responses/ActionConflict"},
+          "413": {"$ref": "#/components/responses/RequestTooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/MutationUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}/actions/accept": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "post": {
+        "operationId": "acceptRequest",
+        "summary": "Accept the request",
+        "description": "Accept the request using an Accept observation.",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationKey"},
+          {"$ref": "#/components/parameters/ContentEncoding"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/TransitionInput"},
+              "examples": {
+                "input": {"value": {"expectedRevision": "opaque-observation"}}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed Accept or authorized exact replay",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/AcceptResult"},
+                "examples": {
+                  "accept": {
+                    "value": {
+                      "ref": "accept-ref",
+                      "action": "accept",
+                      "resultRevision": "9007199254740993",
+                      "state": "ACCEPTED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "403": {"$ref": "#/components/responses/ActionDenied"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "409": {"$ref": "#/components/responses/ActionConflict"},
+          "413": {"$ref": "#/components/responses/RequestTooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/MutationUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}/actions/reject": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "post": {
+        "operationId": "rejectRequest",
+        "summary": "Reject the request",
+        "description": "Reject the request using a Reject observation and an explicit reason.",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationKey"},
+          {"$ref": "#/components/parameters/ContentEncoding"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/ReasonedTransitionInput"},
+              "examples": {
+                "input": {"value": {"expectedRevision": "opaque-observation", "reason": "  Powód  "}}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed Reject or authorized exact replay",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/RejectResult"},
+                "examples": {
+                  "reject": {
+                    "value": {
+                      "ref": "reject-ref",
+                      "action": "reject",
+                      "resultRevision": "9007199254740993",
+                      "state": "REJECTED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "403": {"$ref": "#/components/responses/ActionDenied"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "409": {"$ref": "#/components/responses/ActionConflict"},
+          "413": {"$ref": "#/components/responses/RequestTooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/MutationUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}/actions/delete": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "post": {
+        "operationId": "deleteRequest",
+        "summary": "Delete the request",
+        "description": "Delete the request using a Delete observation and an explicit reason.",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationKey"},
+          {"$ref": "#/components/parameters/ContentEncoding"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/ReasonedTransitionInput"},
+              "examples": {
+                "input": {"value": {"expectedRevision": "opaque-observation", "reason": "  Powód  "}}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed Delete or authorized exact replay",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/DeleteResult"},
+                "examples": {
+                  "delete": {
+                    "value": {
+                      "ref": "delete-ref",
+                      "action": "delete",
+                      "resultRevision": "9007199254740993",
+                      "state": "DELETED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "403": {"$ref": "#/components/responses/ActionDenied"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "409": {"$ref": "#/components/responses/ActionConflict"},
+          "413": {"$ref": "#/components/responses/RequestTooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/MutationUnavailable"}
+        }
+      }
+    },
+    "/requests/{ref}/actions/publish": {
+      "parameters": [{"$ref": "#/components/parameters/Reference"}],
+      "post": {
+        "operationId": "publishRequest",
+        "summary": "Publish the request",
+        "description": "Publish the request using a Publish observation. The result includes its confirmed publication ID.",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationKey"},
+          {"$ref": "#/components/parameters/ContentEncoding"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/TransitionInput"},
+              "examples": {
+                "input": {"value": {"expectedRevision": "opaque-observation"}}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed Publish or authorized exact replay",
+            "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/PublishResult"},
+                "examples": {
+                  "publish": {
+                    "value": {
+                      "ref": "publish-ref",
+                      "action": "publish",
+                      "resultRevision": "9007199254740993",
+                      "state": "PUBLISHED",
+                      "publicationId": "9223372036854775807"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidInput"},
+          "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+          "403": {"$ref": "#/components/responses/ActionDenied"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "406": {"$ref": "#/components/responses/NotAcceptable"},
+          "409": {"$ref": "#/components/responses/ActionConflict"},
+          "413": {"$ref": "#/components/responses/RequestTooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/MutationUnavailable"}
+        }
+      }
+    }
+  },
+  "x-routing-problems": {
+    "404": {"$ref": "#/components/responses/NotFound"},
+    "405": {"$ref": "#/components/responses/MethodNotAllowed"}
+  },
+  "x-deployment-responses": {
+    "429": {"$ref": "#/components/responses/Throttled"}
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Configured bearer identity. The synthetic profile uses provisioned opaque credentials."
+      }
+    },
+    "parameters": {
+      "Reference": {
+        "name": "ref",
+        "in": "path",
+        "required": true,
+        "description": "Opaque request reference. Percent-encode as a single path segment.",
+        "schema": {"$ref": "#/components/schemas/Reference"}
+      },
+      "OperationKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "One signed key issued for this caller and scope. Repeat the exact original decoded intent and same key after outcome_unknown. Duplicate headers and comma-coalesced lists are rejected.",
+        "schema": {"$ref": "#/components/schemas/SignedKey"}
+      },
+      "ContentEncoding": {
+        "name": "Content-Encoding",
+        "in": "header",
+        "required": false,
+        "description": "One encoding, case-insensitive. Omit to send identity. The decoded request body is bounded to 131072 bytes.",
+        "schema": {"type": "string", "pattern": "^(?:[gG][zZ][iI][pP]|[iI][dD][eE][nN][tT][iI][tT][yY])$"}
+      }
+    },
+    "headers": {
+      "NoStore": {"required": true, "schema": {"const": "no-store"}},
+      "BearerChallenge": {"required": true, "schema": {"const": "Bearer"}},
+      "CreateLocation": {
+        "required": true,
+        "schema": {"type": "string", "format": "uri-reference", "pattern": "^/requests/[^/]+$"},
+        "description": "Relative URI with the reference encoded as a single segment."
+      },
+      "AllowedMethods": {
+        "required": true,
+        "schema": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "description": "Comma-separated HTTP methods."
+      },
+      "JsonMedia": {"schema": {"const": "application/json"}},
+      "SupportedEncodings": {"schema": {"const": "gzip, identity"}}
+    },
+    "responses": {
+      "InvalidInput": {
+        "description": "Invalid input. Field names are optional and come from a public allowlist.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 400}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:invalid_input"},
+                        "title": {"const": "Invalid input"}
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "AuthenticationRequired": {
+        "description": "Authentication required.",
+        "headers": {
+          "Cache-Control": {"$ref": "#/components/headers/NoStore"},
+          "WWW-Authenticate": {"$ref": "#/components/headers/BearerChallenge"}
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 401}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:authentication_required"},
+                        "title": {"const": "Authentication required"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ActionDenied": {
+        "description": "Denied for a safely disclosable action or key issuance.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 403}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:action_denied"},
+                        "title": {"const": "Action denied"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Absent, concealed or unmatched route.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 404}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:not_found"},
+                        "title": {"const": "Not found"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "The path matches but this method is unsupported. The Allow header includes Spring's advertised implicit methods.",
+        "headers": {
+          "Cache-Control": {"$ref": "#/components/headers/NoStore"},
+          "Allow": {"$ref": "#/components/headers/AllowedMethods"}
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 405}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:method_not_allowed"},
+                        "title": {"const": "Method not allowed"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "NotAcceptable": {
+        "description": "No acceptable successful representation.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 406}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:not_acceptable"},
+                        "title": {"const": "Not acceptable"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "IllegalState": {
+        "description": "The action is ineligible in the current state.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 409}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:illegal_state"},
+                        "title": {"const": "Illegal state"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "CreateConflict": {
+        "description": "An authorized retry decision. No Location or receipt detail on a problem.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 409}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:key_conflict"},
+                        "title": {"const": "Key conflict"},
+                        "invalidFields": false
+                      }
+                    },
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:key_expired"},
+                        "title": {"const": "Key expired"},
+                        "invalidFields": false
+                      }
+                    },
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:retry_fenced"},
+                        "title": {"const": "Retry fenced"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ActionConflict": {
+        "description": "An authorized lifecycle, observation or retry decision.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 409}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:illegal_state"},
+                        "title": {"const": "Illegal state"},
+                        "invalidFields": false
+                      }
+                    },
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:stale_observation"},
+                        "title": {"const": "Stale observation"},
+                        "invalidFields": false
+                      }
+                    },
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:key_conflict"},
+                        "title": {"const": "Key conflict"},
+                        "invalidFields": false
+                      }
+                    },
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:key_expired"},
+                        "title": {"const": "Key expired"},
+                        "invalidFields": false
+                      }
+                    },
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:retry_fenced"},
+                        "title": {"const": "Retry fenced"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "RequestTooLarge": {
+        "description": "The request exceeds the decoded byte cap.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 413}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:request_too_large"},
+                        "title": {"const": "Request too large"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "UnsupportedMedia": {
+        "description": "Invalid JSON media type or unsupported content encoding. The response advertises the applicable media or encoding.",
+        "headers": {
+          "Cache-Control": {"$ref": "#/components/headers/NoStore"},
+          "Accept": {"$ref": "#/components/headers/JsonMedia"},
+          "Accept-Encoding": {"$ref": "#/components/headers/SupportedEncodings"}
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 415}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:unsupported_media"},
+                        "title": {"const": "Unsupported media"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "UnsupportedPatchMedia": {
+        "description": "Invalid PATCH media type or unsupported content encoding. The response advertises the applicable media or encoding.",
+        "headers": {
+          "Cache-Control": {"$ref": "#/components/headers/NoStore"},
+          "Accept": {"$ref": "#/components/headers/JsonMedia"},
+          "Accept-Encoding": {"$ref": "#/components/headers/SupportedEncodings"},
+          "Accept-Patch": {"$ref": "#/components/headers/JsonMedia"}
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 415}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:unsupported_media"},
+                        "title": {"const": "Unsupported media"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Throttled": {
+        "description": "Reserved for enforced throttling in a deployed policy.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 429}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:throttled"},
+                        "title": {"const": "Too many requests"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Unexpected error with safe correlation.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 500}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:internal_error"},
+                        "title": {"const": "Internal server error"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "AuthorityUnavailable": {
+        "description": "Required authority is unavailable.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 503}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:authority_unavailable"},
+                        "title": {"const": "Authority unavailable"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "MutationUnavailable": {
+        "description": "Authority unavailable or the outcome cannot be determined. For outcome_unknown, retry the same intent with the same key.",
+        "headers": {"Cache-Control": {"$ref": "#/components/headers/NoStore"}},
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {"$ref": "#/components/schemas/Problem"},
+                {
+                  "properties": {"status": {"const": 503}},
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:authority_unavailable"},
+                        "title": {"const": "Authority unavailable"},
+                        "invalidFields": false
+                      }
+                    },
+                    {
+                      "properties": {
+                        "type": {"const": "urn:requests:problem:outcome_unknown"},
+                        "title": {"const": "Outcome unknown"},
+                        "invalidFields": false
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "RequestType": {
+        "type": "string",
+        "enum": ["HR_TICKET", "BUG_REPORT", "INTERNAL_REQUEST"]
+      },
+      "RequestState": {
+        "type": "string",
+        "enum": ["CREATED", "VERIFIED", "ACCEPTED", "REJECTED", "DELETED", "PUBLISHED"]
+      },
+      "ContextAction": {
+        "type": "string",
+        "enum": ["edit", "verify", "accept", "reject", "delete", "publish"]
+      },
+      "Reference": {
+        "type": "string",
+        "minLength": 1,
+        "x-utf8MaxBytes": 128,
+        "description": "Opaque reference with a decoded UTF-8 byte limit."
+      },
+      "Name": {
+        "type": "string",
+        "minLength": 1,
+        "x-utf8MaxBytes": 256,
+        "description": "Request name or exact browse name filter."
+      },
+      "Body": {"type": "string", "minLength": 1, "x-utf8MaxBytes": 16384, "description": "Request body text."},
+      "Reason": {
+        "type": "string",
+        "minLength": 1,
+        "x-utf8MaxBytes": 2048,
+        "description": "A required reason for Reject or Delete."
+      },
+      "SignedKey": {
+        "type": "string",
+        "minLength": 1,
+        "x-utf8MaxBytes": 1024,
+        "description": "Opaque signed key from operation-key issuance. Do not parse or alter it.",
+        "pattern": "^[^,]+$"
+      },
+      "Observation": {
+        "type": "string",
+        "minLength": 1,
+        "x-utf8MaxBytes": 2048,
+        "description": "Opaque observation from matching action context. Display revisions are decimal strings and fail this input.",
+        "not": {"pattern": "^[0-9]+$"}
+      },
+      "Cursor": {
+        "type": "string",
+        "minLength": 1,
+        "x-utf8MaxBytes": 2048,
+        "description": "Opaque encrypted ASCII cursor.",
+        "pattern": "^[\\u0001-\\u007f]+$"
+      },
+      "DecimalString": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{0,18}$",
+        "x-decimalMaximum": "9223372036854775807",
+        "description": "Canonical positive base-10 signed-64-bit value through 9223372036854775807. JSON type is string."
+      },
+      "CreateInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "name", "body"],
+        "properties": {
+          "type": {"$ref": "#/components/schemas/RequestType"},
+          "name": {"$ref": "#/components/schemas/Name"},
+          "body": {"$ref": "#/components/schemas/Body"}
+        }
+      },
+      "EditInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["body", "expectedRevision"],
+        "properties": {
+          "body": {"$ref": "#/components/schemas/Body"},
+          "expectedRevision": {"$ref": "#/components/schemas/Observation"}
+        }
+      },
+      "TransitionInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedRevision"],
+        "properties": {"expectedRevision": {"$ref": "#/components/schemas/Observation"}}
+      },
+      "ReasonedTransitionInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedRevision", "reason"],
+        "properties": {
+          "expectedRevision": {"$ref": "#/components/schemas/Observation"},
+          "reason": {"$ref": "#/components/schemas/Reason"}
+        }
+      },
+      "IssuedKey": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "expiresAt"],
+        "properties": {
+          "key": {"$ref": "#/components/schemas/SignedKey"},
+          "expiresAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "CreateResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "action", "resultRevision", "state"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "action": {"const": "create"},
+          "resultRevision": {"const": "1"},
+          "state": {"const": "CREATED"}
+        }
+      },
+      "EditResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "action", "resultRevision", "state"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "action": {"const": "edit"},
+          "resultRevision": {"$ref": "#/components/schemas/DecimalString"},
+          "state": {
+            "type": "string",
+            "enum": ["CREATED", "VERIFIED"]
+          }
+        }
+      },
+      "VerifyResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "action", "resultRevision", "state"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "action": {"const": "verify"},
+          "resultRevision": {"$ref": "#/components/schemas/DecimalString"},
+          "state": {"const": "VERIFIED"}
+        }
+      },
+      "AcceptResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "action", "resultRevision", "state"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "action": {"const": "accept"},
+          "resultRevision": {"$ref": "#/components/schemas/DecimalString"},
+          "state": {"const": "ACCEPTED"}
+        }
+      },
+      "RejectResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "action", "resultRevision", "state"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "action": {"const": "reject"},
+          "resultRevision": {"$ref": "#/components/schemas/DecimalString"},
+          "state": {"const": "REJECTED"}
+        }
+      },
+      "DeleteResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "action", "resultRevision", "state"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "action": {"const": "delete"},
+          "resultRevision": {"$ref": "#/components/schemas/DecimalString"},
+          "state": {"const": "DELETED"}
+        }
+      },
+      "PublishResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "action", "resultRevision", "state", "publicationId"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "action": {"const": "publish"},
+          "resultRevision": {"$ref": "#/components/schemas/DecimalString"},
+          "state": {"const": "PUBLISHED"},
+          "publicationId": {"$ref": "#/components/schemas/DecimalString"}
+        }
+      },
+      "ReadProjectionMasks": {
+        "description": "When a publication ID is visible, the state may be omitted by its independent field mask. A visible state with a publication ID is PUBLISHED. Deleted metadata omits retained material and display revision.",
+        "allOf": [
+          {
+            "if": {"required": ["publicationId"]},
+            "then": {"properties": {"state": {"const": "PUBLISHED"}}}
+          },
+          {
+            "if": {
+              "required": ["state"],
+              "properties": {"state": {"const": "DELETED"}}
+            },
+            "then": {"properties": {"name": false, "body": false, "revision": false}}
+          }
+        ]
+      },
+      "RequestView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "type": {"$ref": "#/components/schemas/RequestType"},
+          "name": {"$ref": "#/components/schemas/Name"},
+          "body": {"$ref": "#/components/schemas/Body"},
+          "state": {"$ref": "#/components/schemas/RequestState"},
+          "revision": {"$ref": "#/components/schemas/DecimalString"},
+          "publicationId": {"$ref": "#/components/schemas/DecimalString"}
+        },
+        "description": "Omit masked optional members. A revision describes the current request. Publication ID requires permission and confirmed proof.",
+        "allOf": [{"$ref": "#/components/schemas/ReadProjectionMasks"}]
+      },
+      "ActionContext": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref", "action", "state", "context", "expectedRevision"],
+            "properties": {
+              "ref": {"$ref": "#/components/schemas/Reference"},
+              "action": {"const": "edit"},
+              "state": {
+                "type": "string",
+                "enum": ["CREATED", "VERIFIED"]
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["body"],
+                "properties": {"body": {"$ref": "#/components/schemas/Body"}}
+              },
+              "expectedRevision": {"$ref": "#/components/schemas/Observation"}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref", "action", "state", "context", "expectedRevision"],
+            "properties": {
+              "ref": {"$ref": "#/components/schemas/Reference"},
+              "action": {"const": "verify"},
+              "state": {"const": "CREATED"},
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["body"],
+                "properties": {"body": {"$ref": "#/components/schemas/Body"}}
+              },
+              "expectedRevision": {"$ref": "#/components/schemas/Observation"}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref", "action", "state", "context", "expectedRevision"],
+            "properties": {
+              "ref": {"$ref": "#/components/schemas/Reference"},
+              "action": {"const": "accept"},
+              "state": {"const": "VERIFIED"},
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["body"],
+                "properties": {"body": {"$ref": "#/components/schemas/Body"}}
+              },
+              "expectedRevision": {"$ref": "#/components/schemas/Observation"}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref", "action", "state", "context", "expectedRevision"],
+            "properties": {
+              "ref": {"$ref": "#/components/schemas/Reference"},
+              "action": {"const": "reject"},
+              "state": {
+                "type": "string",
+                "enum": ["VERIFIED", "ACCEPTED"]
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": {"name": {"$ref": "#/components/schemas/Name"}}
+              },
+              "expectedRevision": {"$ref": "#/components/schemas/Observation"}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref", "action", "state", "context", "expectedRevision"],
+            "properties": {
+              "ref": {"$ref": "#/components/schemas/Reference"},
+              "action": {"const": "delete"},
+              "state": {"const": "CREATED"},
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": {"name": {"$ref": "#/components/schemas/Name"}}
+              },
+              "expectedRevision": {"$ref": "#/components/schemas/Observation"}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref", "action", "state", "context", "expectedRevision"],
+            "properties": {
+              "ref": {"$ref": "#/components/schemas/Reference"},
+              "action": {"const": "publish"},
+              "state": {"const": "ACCEPTED"},
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": {"name": {"$ref": "#/components/schemas/Name"}}
+              },
+              "expectedRevision": {"$ref": "#/components/schemas/Observation"}
+            }
+          }
+        ]
+      },
+      "BrowseItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "type": {"$ref": "#/components/schemas/RequestType"},
+          "name": {"$ref": "#/components/schemas/Name"},
+          "state": {"$ref": "#/components/schemas/RequestState"},
+          "publicationId": {"$ref": "#/components/schemas/DecimalString"}
+        },
+        "allOf": [{"$ref": "#/components/schemas/ReadProjectionMasks"}]
+      },
+      "BrowsePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "maxItems": 50, "items": {"$ref": "#/components/schemas/BrowseItem"}},
+          "nextCursor": {"$ref": "#/components/schemas/Cursor"}
+        }
+      },
+      "RequestHistory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "changes"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/Reference"},
+          "changes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {"$ref": "#/components/schemas/HistoryChange"}
+          }
+        }
+      },
+      "HistoryChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence", "action", "from", "to"],
+        "properties": {
+          "sequence": {"type": "integer", "minimum": 1, "maximum": 4},
+          "action": {
+            "type": "string",
+            "enum": ["create", "verify", "accept", "reject", "delete", "publish"]
+          },
+          "from": {
+            "oneOf": [{"$ref": "#/components/schemas/RequestState"}, {"type": "null"}]
+          },
+          "to": {"$ref": "#/components/schemas/RequestState"}
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"action": {"const": "create"}}
+            },
+            "then": {
+              "properties": {"sequence": {"const": 1}, "from": {"type": "null"}, "to": {"const": "CREATED"}}
+            },
+            "else": {
+              "properties": {"sequence": {"minimum": 2}, "from": {"$ref": "#/components/schemas/RequestState"}}
+            }
+          }
+        ]
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "title", "status", "instance", "correlationId"],
+        "properties": {
+          "type": {"type": "string", "format": "uri", "pattern": "^urn:requests:problem:[a-z_]+$"},
+          "title": {"type": "string"},
+          "status": {"type": "integer", "minimum": 400, "maximum": 599},
+          "instance": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^urn:uuid:[0-9a-f-]{36}$",
+            "description": "The URN carries the same generated UUID as correlationId."
+          },
+          "correlationId": {"type": "string", "format": "uuid"},
+          "invalidFields": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "type",
+                "name",
+                "body",
+                "reason",
+                "expectedRevision",
+                "Idempotency-Key",
+                "ref",
+                "action",
+                "state",
+                "size",
+                "cursor"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
