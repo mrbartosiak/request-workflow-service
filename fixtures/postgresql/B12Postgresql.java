@@ -67,6 +67,7 @@ import tools.jackson.databind.node.ObjectNode;
 /** B12 fixture with scoped, independently authenticated evidence inputs and the actual Spring MVC routes. */
 public final class B12Postgresql {
     private static final Instant NOW = Instant.parse("2026-11-22T20:00:00Z");
+    private static final Instant EARLIER_ISSUE = NOW.minusSeconds(5);
     private static final Duration WINDOW = Duration.ofMillis(2400);
     private static final String JSON = """
             {"type":"HR_TICKET","name":"fixture name","body":"fixture body"}
@@ -88,6 +89,7 @@ public final class B12Postgresql {
     private final AtomicBoolean withholdHandoff = new AtomicBoolean();
     private final AtomicReference<Instant> clock = new AtomicReference<>(NOW);
     private final AtomicReference<Runnable> afterPrepare = new AtomicReference<>();
+    private final AtomicReference<Runnable> afterOriginalLookup = new AtomicReference<>();
     private final AtomicReference<Correlation> prepared = new AtomicReference<>();
     private final Map<ReceiptKey, OperationReceipt> originalEvidence = new HashMap<>();
     private final SecureRandom random = new SecureRandom();
@@ -151,7 +153,12 @@ public final class B12Postgresql {
             if (distrustOriginal.get()) {
                 throw new AuthorityUnavailableException();
             }
-            return Optional.ofNullable(originalEvidence.get(key.receiptKey()));
+            var receipt = Optional.ofNullable(originalEvidence.get(key.receiptKey()));
+            var cut = afterOriginalLookup.getAndSet(null);
+            if (cut != null) {
+                cut.run();
+            }
+            return receipt;
         }, releasePreparation(), this::recordHandoff);
         var create = new SyntheticCreateConfiguration.Settings(base.create().command(), base.create().proof(),
                 base.create().policy(), base.create().writer(), actors, clock::get, secrets, Optional.of(ports));
@@ -227,9 +234,9 @@ public final class B12Postgresql {
 
             rollbackAfterStage(key);
             require(post(mvc, key, JSON).equals(first) && counts.equals(counts()), "aborted enqueue consumed the committed receipt");
-            earlierGenerations(mvc);
+            String earlierMiss = earlierGenerations(mvc);
             revocationOrders(mvc, key, first);
-            expiry(mvc);
+            expiry(mvc, earlierMiss);
         }
     }
 
@@ -318,11 +325,11 @@ public final class B12Postgresql {
         System.out.println("PASS durable preparation survived rollback after buffer staging, no drainable bytes or handoff proof");
     }
 
-    private void earlierGenerations(B08MvcSession mvc) throws Exception {
+    private String earlierGenerations(B08MvcSession mvc) throws Exception {
         var previous = new WriterEpoch(UUID.randomUUID(), B10Postgresql.WRITER.generation() - 1);
         var policy = settings.effectivePolicy();
         var oldKeys = new OperationKeyIssuer(new CurrentAccess(ignored -> { }, previous, List.of(policy)),
-                clock::get, secrets, Duration.ofSeconds(3));
+                () -> EARLIER_ISSUE, secrets, Duration.ofSeconds(3));
         var oldAdmission = new Admission(policy.genesis(), previous);
         String old = oldKeys.issue(B10Postgresql.OWNER).key();
         String absent = oldKeys.issue(B10Postgresql.OWNER).key();
@@ -374,6 +381,7 @@ public final class B12Postgresql {
         }
         require(localLookups.get() == local && originalLookups.get() == original, "authorization preflight leaked a lookup");
         System.out.println("PASS unauthenticated, wrong signed scope, and unavailable confirmed authority performed zero lookups");
+        return absent;
     }
 
     private OperationReceipt historic(OperationKeyIssuer.VerifiedKey key, boolean retained) {
@@ -452,10 +460,20 @@ public final class B12Postgresql {
         System.out.println("PASS PostgreSQL shared enqueue first and exclusive revocation first with audited confirmation and zero denied lookups");
     }
 
-    private void expiry(B08MvcSession mvc) throws Exception {
+    private void expiry(B08MvcSession mvc, String earlierMiss) throws Exception {
+        var earlierCutoff = EARLIER_ISSUE.plus(OperationKeyIssuer.VALIDITY);
+        clock.set(earlierCutoff.minusSeconds(1));
+        afterOriginalLookup.set(() -> clock.set(earlierCutoff));
+        problem(prior(mvc, earlierMiss, JSON), 409, "key_expired");
+        int afterLookup = originalLookups.get();
+        problem(post(mvc, earlierMiss, JSON), 409, "key_expired");
+        require(originalLookups.get() == afterLookup, "expired earlier retry reached original proof");
+        System.out.println("PASS earlier-key cutoff superseded the fenced result after one original proof lookup");
+
+        var cutoff = clock.get().plus(OperationKeyIssuer.VALIDITY);
         String expiring = issue(mvc);
         Counts before = counts();
-        afterPrepare.set(() -> clock.set(NOW.plus(OperationKeyIssuer.VALIDITY)));
+        afterPrepare.set(() -> clock.set(cutoff));
         problem(post(mvc, expiring, JSON), 409, "key_expired");
         require(status(prepared.get()).equals(PREPARED) && counts().equals(before.withOneCreate()),
                 "expiry after preparation must preserve only the committed effect and unknown handoff");

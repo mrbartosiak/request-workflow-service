@@ -489,12 +489,18 @@ public final class B08Postgresql {
         problem(present, 409, "retry_fenced");
         require(maskCorrelation(absent).equals(maskCorrelation(present)) && absent.contentType().equals(present.contentType())
                 && absent.cache().equals(present.cache()), "past-generation presence changed the public result");
-        require(trace.claims.get() == 0 && trace.lookups.get() == 2 && trace.exclusive.get() == 0,
-                "past keys must use guarded lookup only");
-        expiryAtCut(mvc, absentKey.key(), trace.beforeReceiptRead);
-        expiryAtCut(mvc, storedKey.key(), trace.beforeReceiptRead);
+        require(trace.claims.get() == 0 && trace.lookups.get() == 0 && trace.exclusive.get() == 0,
+                "past keys must use the original proof port rather than current receipt rows");
+        clock.set(NOW.plus(OperationKeyIssuer.VALIDITY));
+        try {
+            problem(mvc.invoke(B08MvcSession.Call.create(owner(), absentKey.key(), CREATE)), 409, "key_expired");
+            problem(mvc.invoke(B08MvcSession.Call.create(owner(), storedKey.key(), CREATE)), 409, "key_expired");
+            require(trace.lookups.get() == 0 && trace.claims.get() == 0, "expired keys must stop before receipt access");
+        } finally {
+            clock.set(NOW);
+        }
         require(count("request") == 7 && count("operation_receipt") == 8, "past generation wrote a new effect");
-        System.out.println("PASS past-generation absent and unproved present receipts fenced before cutoff and expired during read");
+        System.out.println("PASS past-generation absent and unproved present receipts fenced before cutoff and expired afterward with zero local lookups");
     }
 
     private void expiryAtCut(B08MvcSession mvc, String key, AtomicReference<Cut> cut) throws Exception {
