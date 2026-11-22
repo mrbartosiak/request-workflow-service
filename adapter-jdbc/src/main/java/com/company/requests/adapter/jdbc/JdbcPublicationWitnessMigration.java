@@ -1,0 +1,48 @@
+package com.company.requests.adapter.jdbc;
+
+import javax.sql.DataSource;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+
+/** The publication witness add-on, enabled explicitly by the workflow schema owner. */
+public final class JdbcPublicationWitnessMigration {
+    private final JdbcTransactionRunner owner;
+    private final JdbcTemplate jdbc;
+
+    public JdbcPublicationWitnessMigration(DataSource workflowOwner) {
+        owner = new JdbcTransactionRunner(workflowOwner);
+        jdbc = new JdbcTemplate(workflowOwner);
+    }
+
+    public void migrate() {
+        owner.run(() -> {
+            jdbc.execute("SELECT pg_advisory_xact_lock(1919250805, 1)");
+            jdbc.execute("""
+                    CREATE TABLE IF NOT EXISTS requests.publication_schema_migration (
+                        version integer PRIMARY KEY CHECK (version = 1)
+                    )
+                    """);
+            if (Boolean.TRUE.equals(jdbc.queryForObject("""
+                    SELECT EXISTS (SELECT 1 FROM requests.publication_schema_migration WHERE version = 1)
+                    """, Boolean.class))) {
+                return null;
+            }
+            jdbc.execute("LOCK TABLE requests.request IN SHARE MODE");
+            if (Boolean.TRUE.equals(jdbc.queryForObject("""
+                    SELECT EXISTS (SELECT 1 FROM requests.request WHERE publication_id IS NOT NULL)
+                    """, Boolean.class))) {
+                throw new IllegalStateException("Existing publications require an attested journal migration.");
+            }
+            var script = new ResourceDatabasePopulator(new ClassPathResource("db/workflow/publication_witness_v1.sql"));
+            script.setSqlScriptEncoding("UTF-8");
+            jdbc.execute((ConnectionCallback<Void>) connection -> {
+                script.populate(connection);
+                return null;
+            });
+            jdbc.update("INSERT INTO requests.publication_schema_migration VALUES (1)");
+            return null;
+        });
+    }
+}

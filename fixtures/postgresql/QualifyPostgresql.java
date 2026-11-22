@@ -184,11 +184,15 @@ public final class QualifyPostgresql {
         workflowAndProof(args, "b11", null, null, check);
     }
 
+    static void publicationProofAndRestore(String[] args, ScopeResolverCheck check) throws Exception {
+        workflowAndProof(args, "b16", null, null, check);
+    }
+
     private static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check,
                                          ScopeProofCheck scopeCheck, ScopeResolverCheck resolverCheck) throws Exception {
         boolean withResolver = resolverCheck != null;
         boolean withRestore = scopeCheck != null || withResolver;
-        require(List.of("b06", "b08", "b09", "b11").contains(ticket), "Unexpected dual-cluster fixture ticket");
+        require(List.of("b06", "b08", "b09", "b11", "b16").contains(ticket), "Unexpected dual-cluster fixture ticket");
         String label = ticket.toUpperCase(Locale.ROOT);
         require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),
                 "Usage: run|cleanup BIN RUNS_DIRECTORY " + ticket + "-RUN_ID");
