@@ -2,7 +2,7 @@ package com.company.requests.application;
 
 import java.util.function.Supplier;
 
-/** Runs synchronous work in one owned command transaction. */
+/** Runs synchronous work in one owned database transaction. */
 public interface TransactionRunner {
     /**
      * Returns the result after commit. A failed commit phase requires authoritative

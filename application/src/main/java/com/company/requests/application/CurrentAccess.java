@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Function;
 
 /** Current submitted, result and field access for the configured synthetic scope. */
@@ -271,6 +272,30 @@ public final class CurrentAccess {
                 .filter(request -> request.ref().equals(ref))
                 .flatMap(request -> proof.confirmed(admission, guard, request, Optional.empty()))
                 .flatMap(PublicationJournal.Entry::allocation));
+    }
+
+    /** Dispatch requires the current route principal's distinct grant and the original Publish identity. */
+    public Optional<UUID> confirmedDispatchPublication(PolicyGuard guard, Admission admission,
+                                                       AuthenticatedActor principal, RequestType type,
+                                                       OutboundObligation obligation) {
+        var policy = policies.get(guard.organization());
+        if (effective == null || policy == null || !writer.equals(admission.writer())
+                || !policy.genesis().equals(admission.genesis())) {
+            throw new AuthorityUnavailableException();
+        }
+        if (!guard.organization().equals(principal.organization()) || !guard.organization().equals(obligation.tenant())
+                || !permitted(policy, guard, principal, Grant.DISPATCH_PUBLISH_REFERENCE, type)) {
+            throw new AccessDeniedException();
+        }
+        return effective.publication().flatMap(proof -> effective.requests()
+                .findPublishedTarget(guard, obligation.ref())
+                .filter(target -> target.type() == type && target.ref().equals(obligation.ref())
+                        && target.revision() == obligation.revision())
+                .flatMap(target -> proof.confirmed(admission, guard, target, Optional.empty())))
+                .map(PublicationJournal.Entry::attempt)
+                .filter(attempt -> obligation.effectId().equals(
+                        OutboundObligation.effectIdentity(attempt.receiptIdentity(), obligation.triggerSlot())))
+                .map(PublicationJournal.Attempt::id);
     }
 
     /** Independently authorize the field and prove its association on the caller's organization guard. */

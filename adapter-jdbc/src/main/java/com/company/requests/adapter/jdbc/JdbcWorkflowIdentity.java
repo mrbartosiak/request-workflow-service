@@ -15,7 +15,7 @@ public final class JdbcWorkflowIdentity {
     }
 
     public Identity current() {
-        JdbcTransactionRunner.requireBoundConnection(source);
+        JdbcTransactionRunner.requireWorkflowReadConnection(source);
         return inspect(source);
     }
 

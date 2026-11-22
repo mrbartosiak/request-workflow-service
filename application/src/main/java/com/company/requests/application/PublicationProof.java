@@ -2,9 +2,9 @@ package com.company.requests.application;
 
 import com.company.requests.application.PublicationJournal.Entry;
 import com.company.requests.application.PublicationJournal.State;
+import com.company.requests.application.RequestStore.PublishedTarget;
 import com.company.requests.application.ScopeAuthority.Admission;
 import com.company.requests.domain.Request;
-import com.company.requests.domain.RequestState;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -20,9 +20,13 @@ public final class PublicationProof {
 
     Optional<Entry> confirmed(Admission admission, PolicyGuard guard, Request request,
                               Optional<OperationReceipt> original) {
+        return PublishedTarget.from(request).flatMap(target -> confirmed(admission, guard, target, original));
+    }
+
+    Optional<Entry> confirmed(Admission admission, PolicyGuard guard, PublishedTarget request,
+                              Optional<OperationReceipt> original) {
         if (!guard.organization().equals(admission.genesis().organization())
-                || !guard.organization().equals(request.organization())
-                || request.state() != RequestState.PUBLISHED || request.publicationId().isEmpty()) {
+                || !guard.organization().equals(request.organization())) {
             return Optional.empty();
         }
         return journal.activeBinding(admission.writer(), guard.organization(), request.type(), request.ref())
@@ -31,7 +35,7 @@ public final class PublicationProof {
                         && entry.attempt().organization().equals(guard.organization())
                         && entry.attempt().type() == request.type() && entry.attempt().ref().equals(request.ref())
                         && entry.attempt().resultRevision() == request.revision()
-                        && entry.allocation().equals(request.publicationId()))
+                        && entry.allocation().filter(request.publicationId()::equals).isPresent())
                 .filter(entry -> original.isEmpty() || matchesReceipt(entry, original.orElseThrow()))
                 .filter(entry -> confirmations.contains(guard, entry));
     }

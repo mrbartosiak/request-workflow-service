@@ -50,6 +50,9 @@ public final class QualifyPostgresql {
     private final Role releaseHandoff = new Role("b12_handoff");
     private final Role releaseClient = new Role("b12_client");
     private final Role releaseReader = new Role("b12_reader");
+    private final Role dispatchA = new Role("b23_worker_a");
+    private final Role dispatchB = new Role("b23_worker_b");
+    private final Role dispatchProof = new Role("b23_proof_reader");
     private final Cluster workflow;
     private final Cluster proof;
     private final Cluster restore;
@@ -214,6 +217,10 @@ public final class QualifyPostgresql {
         workflowAndProof(args, "b17", null, null, null, null, check);
     }
 
+    static void dispatchWorker(String[] args, DispatchCheck check) throws Exception {
+        workflowAndProof(args, "b23", null, null, null, null, null, check);
+    }
+
     static void requestDetail(String[] args, ReleaseCheck check) throws Exception {
         workflowAndProof(args, "b19", null, null, null, null, check);
     }
@@ -243,12 +250,20 @@ public final class QualifyPostgresql {
     private static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check,
                                          ScopeProofCheck scopeCheck, ScopeResolverCheck resolverCheck,
                                          EffectiveScopeCheck effectiveCheck, ReleaseCheck releaseCheck) throws Exception {
-        boolean withRelease = releaseCheck != null;
+        workflowAndProof(args, ticket, check, scopeCheck, resolverCheck, effectiveCheck, releaseCheck, null);
+    }
+
+    private static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check,
+                                         ScopeProofCheck scopeCheck, ScopeResolverCheck resolverCheck,
+                                         EffectiveScopeCheck effectiveCheck, ReleaseCheck releaseCheck,
+                                         DispatchCheck dispatchCheck) throws Exception {
+        boolean withDispatch = dispatchCheck != null;
+        boolean withRelease = releaseCheck != null || withDispatch;
         boolean withEffective = effectiveCheck != null || withRelease;
         boolean withResolver = resolverCheck != null || withEffective;
         boolean withRestore = scopeCheck != null || resolverCheck != null || withRelease;
         require(List.of("b06", "b08", "b09", "b10", "b11", "b12", "b13", "b14", "b15", "b16", "b17",
-                        "b19", "b20", "b21").contains(ticket),
+                        "b19", "b20", "b21", "b23").contains(ticket),
                 "Unexpected dual-cluster fixture ticket");
         String label = ticket.toUpperCase(Locale.ROOT);
         require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),
@@ -277,15 +292,19 @@ public final class QualifyPostgresql {
         System.out.printf("%s run=%s Java=%s UTC start=%s%n", label, run, Runtime.version(), Instant.now());
         try {
             WorkflowAndProofCheck operation = check;
-            if (withRelease) {
+            if (withDispatch) {
+                operation = (workflow, proof) -> dispatchCheck.run(workflow, proof,
+                        () -> connect(probe.workflow, probe.workflowResolver),
+                        () -> connect(probe.proof, probe.proofResolver),
+                        () -> connect(probe.proof, probe.proofCreate), probe.releaseLogins(),
+                        new DispatchLogins(() -> connect(probe.workflow, probe.dispatchA),
+                                () -> connect(probe.workflow, probe.dispatchB),
+                                () -> connect(probe.proof, probe.dispatchProof)));
+            } else if (withRelease) {
                 operation = (workflow, proof) -> releaseCheck.run(workflow, proof,
                         () -> connect(probe.workflow, probe.workflowResolver),
                         () -> connect(probe.proof, probe.proofResolver),
-                        () -> connect(probe.proof, probe.proofCreate),
-                        new ReleaseLogins(() -> connect(probe.proof, probe.releasePrep),
-                                () -> connect(probe.proof, probe.releaseHandoff),
-                                () -> connect(probe.proof, probe.releaseClient),
-                                () -> connect(probe.proof, probe.releaseReader)), probe::restoreWorkflowSnapshot);
+                        () -> connect(probe.proof, probe.proofCreate), probe.releaseLogins(), probe::restoreWorkflowSnapshot);
             } else if (withEffective) {
                 operation = (workflow, proof) -> effectiveCheck.run(workflow, proof,
                         () -> connect(probe.workflow, probe.workflowResolver),
@@ -298,7 +317,7 @@ public final class QualifyPostgresql {
             } else if (withRestore) {
                 operation = (workflow, proof) -> scopeCheck.run(workflow, proof, probe::restoreWorkflowSnapshot);
             }
-            probe.runDualCheck(operation, withRestore, withResolver, withEffective, withRelease);
+            probe.runDualCheck(operation, withRestore, withResolver, withEffective, withRelease, withDispatch);
         } catch (Exception | Error failure) {
             try {
                 probe.dualCleanup(withRestore);
@@ -312,10 +331,12 @@ public final class QualifyPostgresql {
     }
 
     private void runDualCheck(WorkflowAndProofCheck check, boolean withRestore, boolean withResolver,
-                              boolean withEffective, boolean withRelease) throws Exception {
+                              boolean withEffective, boolean withRelease, boolean withDispatch) throws Exception {
         initialize(workflow, workflowWriter, workflowObserver, withRestore ? workflowBackup : null,
-                withResolver ? workflowResolver : null);
-        Role[] extraProofRoles = withRelease
+                withResolver ? workflowResolver : null, withDispatch ? new Role[]{dispatchA, dispatchB} : new Role[0]);
+        Role[] extraProofRoles = withDispatch
+                ? new Role[]{proofCreate, releasePrep, releaseHandoff, releaseClient, releaseReader, dispatchProof}
+                : withRelease
                 ? new Role[]{proofCreate, releasePrep, releaseHandoff, releaseClient, releaseReader}
                 : withEffective ? new Role[]{proofCreate} : new Role[0];
         initialize(proof, proofWriter, proofObserver, null, withResolver ? proofResolver : null, extraProofRoles);
@@ -329,6 +350,11 @@ public final class QualifyPostgresql {
         System.out.printf("PASS independent system identifiers workflow=%s proof=%s%n", workflowId, proofId);
         check.run(connections(workflow, workflowWriter, workflowObserver, workflowId),
                 connections(proof, proofWriter, proofObserver, proofId));
+    }
+
+    private ReleaseLogins releaseLogins() {
+        return new ReleaseLogins(() -> connect(proof, releasePrep), () -> connect(proof, releaseHandoff),
+                () -> connect(proof, releaseClient), () -> connect(proof, releaseReader));
     }
 
     private SqlConnection restoreWorkflowSnapshot() throws Exception {
@@ -386,6 +412,14 @@ public final class QualifyPostgresql {
     }
 
     record ReleaseLogins(SqlConnection preparation, SqlConnection handoff, SqlConnection client, SqlConnection reader) { }
+
+    record DispatchLogins(SqlConnection workerA, SqlConnection workerB, SqlConnection proofReader) { }
+
+    @FunctionalInterface
+    interface DispatchCheck {
+        void run(Connections workflow, Connections proof, SqlConnection workflowProjector, SqlConnection proofResolver,
+                 SqlConnection createProof, ReleaseLogins releaseLogins, DispatchLogins dispatchLogins) throws Exception;
+    }
 
     @FunctionalInterface
     interface ReleaseCheck {

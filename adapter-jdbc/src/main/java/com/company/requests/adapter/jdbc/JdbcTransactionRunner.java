@@ -28,24 +28,31 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 public final class JdbcTransactionRunner implements TransactionRunner {
-    private static final ThreadLocal<CommandConnection> ACTIVE_COMMAND = new ThreadLocal<>();
+    private static final ThreadLocal<OwnedConnection> ACTIVE = new ThreadLocal<>();
 
     private final DataSource dataSource;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final boolean bounded;
+    private final boolean worker;
 
     public JdbcTransactionRunner(DataSource commandDataSource) {
-        this(commandDataSource, false);
+        this(commandDataSource, false, false);
     }
 
     public static JdbcTransactionRunner forCreate(DataSource commandDataSource) {
-        return new JdbcTransactionRunner(commandDataSource, true);
+        return new JdbcTransactionRunner(commandDataSource, true, false);
     }
 
-    private JdbcTransactionRunner(DataSource commandDataSource, boolean bounded) {
-        dataSource = Objects.requireNonNull(commandDataSource, "command data source");
+    /** Dedicated manager and guard context for dispatch. Workflow write gates remain command-only. */
+    public static JdbcTransactionRunner forWorker(DataSource workerDataSource) {
+        return new JdbcTransactionRunner(workerDataSource, true, true);
+    }
+
+    private JdbcTransactionRunner(DataSource source, boolean bounded, boolean worker) {
+        dataSource = Objects.requireNonNull(source, "workflow data source");
         this.bounded = bounded;
+        this.worker = worker;
         jdbc = new JdbcTemplate(dataSource);
         transaction = new TransactionTemplate(new JdbcTransactionManager(dataSource));
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -54,10 +61,10 @@ public final class JdbcTransactionRunner implements TransactionRunner {
     @Override
     public <T> T run(Supplier<T> work) {
         Objects.requireNonNull(work, "transaction work");
-        if (ACTIVE_COMMAND.get() != null || TransactionSynchronizationManager.isActualTransactionActive()
+        if (ACTIVE.get() != null || TransactionSynchronizationManager.isActualTransactionActive()
                 || TransactionSynchronizationManager.isSynchronizationActive()
                 || TransactionSynchronizationManager.hasResource(dataSource)) {
-            throw new IllegalStateException("An owned command transaction cannot join an ambient transaction or connection.");
+            throw new IllegalStateException("An owned workflow transaction cannot join an ambient transaction or connection.");
         }
 
         // A callback failure is handled before Spring attempts to commit.
@@ -66,21 +73,24 @@ public final class JdbcTransactionRunner implements TransactionRunner {
             return transaction.execute(status -> {
                 Object resource = TransactionSynchronizationManager.getResource(dataSource);
                 if (!status.isNewTransaction() || !(resource instanceof ConnectionHolder holder)) {
-                    throw new IllegalStateException("The command transaction must own a new connection binding.");
+                    throw new IllegalStateException("The workflow transaction must own a new connection binding.");
                 }
                 T result;
-                ACTIVE_COMMAND.set(new CommandConnection(dataSource, holder));
+                ACTIVE.set(new OwnedConnection(dataSource, holder, worker));
                 try {
+                    if (worker) {
+                        jdbc.execute("SET LOCAL synchronous_commit = on");
+                    }
                     if (bounded) {
                         jdbc.execute("SET LOCAL lock_timeout = '200ms'");
                         jdbc.execute("SET LOCAL statement_timeout = '400ms'");
                     }
                     result = work.get();
                 } finally {
-                    ACTIVE_COMMAND.remove();
+                    ACTIVE.remove();
                 }
                 if (status.isRollbackOnly()) {
-                    throw new IllegalStateException("Command transaction was marked rollback-only.");
+                    throw new IllegalStateException("Workflow transaction was marked rollback-only.");
                 }
                 // PostgreSQL can turn COMMIT into ROLLBACK after a caught statement error.
                 jdbc.queryForObject("SELECT 1", Integer.class);
@@ -145,12 +155,22 @@ public final class JdbcTransactionRunner implements TransactionRunner {
         requireCommand(dataSource);
     }
 
+    static void requireWorkflowReadConnection(DataSource dataSource) {
+        requireOwned(dataSource);
+    }
+
+    static void requireWorkerConnection(DataSource dataSource) {
+        if (!requireOwned(dataSource).worker) {
+            throw new IllegalStateException("Dispatch locks require a worker transaction.");
+        }
+    }
+
     static void rememberSharedGuard(DataSource dataSource, PolicyGuard guard) {
-        requireCommand(dataSource).guards.put(guard.organization(), guard);
+        requireOwned(dataSource).guards.put(guard.organization(), guard);
     }
 
     static void requireGuard(DataSource dataSource, PolicyGuard guard) {
-        if (!guard.equals(requireCommand(dataSource).guards.get(guard.organization()))) {
+        if (!guard.equals(requireOwned(dataSource).guards.get(guard.organization()))) {
             throw new IllegalStateException("Effective authority requires this transaction's organization guard.");
         }
     }
@@ -183,27 +203,37 @@ public final class JdbcTransactionRunner implements TransactionRunner {
         }
     }
 
-    private static CommandConnection requireCommand(DataSource dataSource) {
-        CommandConnection command = ACTIVE_COMMAND.get();
-        // Spring may also synchronize a connection opened on another data source during the callback.
-        if (command == null || command.dataSource != dataSource
-                || !TransactionSynchronizationManager.isActualTransactionActive()
-                || TransactionSynchronizationManager.getResource(dataSource) != command.holder) {
-            throw new IllegalStateException("Workflow records require a transaction on the command data source.");
+    private static OwnedConnection requireCommand(DataSource dataSource) {
+        var connection = requireOwned(dataSource);
+        if (connection.worker) {
+            throw new IllegalStateException("Workflow writes require a command transaction.");
         }
-        return command;
+        return connection;
     }
 
-    private static final class CommandConnection {
+    private static OwnedConnection requireOwned(DataSource dataSource) {
+        var connection = ACTIVE.get();
+        // Spring may also synchronize a connection opened on another data source during the callback.
+        if (connection == null || connection.dataSource != dataSource
+                || !TransactionSynchronizationManager.isActualTransactionActive()
+                || TransactionSynchronizationManager.getResource(dataSource) != connection.holder) {
+            throw new IllegalStateException("Workflow records require the owning transaction's data source.");
+        }
+        return connection;
+    }
+
+    private static final class OwnedConnection {
         private final DataSource dataSource;
         private final ConnectionHolder holder;
+        private final boolean worker;
         private final Map<OrganizationId, PolicyGuard> guards = new HashMap<>();
         private final Map<OrganizationId, PolicyGuard> exclusiveGuards = new HashMap<>();
         private Attempt scopeAttempt;
 
-        private CommandConnection(DataSource dataSource, ConnectionHolder holder) {
+        private OwnedConnection(DataSource dataSource, ConnectionHolder holder, boolean worker) {
             this.dataSource = dataSource;
             this.holder = holder;
+            this.worker = worker;
         }
 
     }

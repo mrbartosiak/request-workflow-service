@@ -1,0 +1,15 @@
+# B23 durable dispatch PostgreSQL fixture
+
+Run from the B23 checkout with `-Workspace` set to the phase workspace and `-Scratch` to a private scratch directory. `Run-B23.ps1 -Action Build` performs both strict offline reactor builds, checks packaged artifacts and compiles the private fixture. `-Action Compile` uses the current synthetic HTTP profile artifacts. After allocation of local ports 55480–55482, run `-Action Run -RunId b23-unique`. `-Action Cleanup -RunId b23-unique` uses that run's existing ownership record to stop its own native processes. The normal run verifies teardown. The fixture invokes the existing Publish route with MockMvc in process. PostgreSQL 18.7 and pgJDBC 42.7.14 remain the qualified pins.
+
+## Provisioning and local worker
+
+1. Install the existing guarded Publish and proof stores, then run workflow migration `migrateDispatchGrants()` and install the B22 outbox through `JdbcOutboxMigration`.
+2. Install `JdbcOutboxWorkerMigration` as the workflow owner. The B22 insert column allowlist and both envelope versions remain compatible. Use the worker and authority-reader permissions in the private fixture's `authorizeRuntime()` as the local role contract.
+3. Use `SyntheticDispatchConfiguration.worker` with the effective-scope settings, separate workflow worker and authority reader data sources, approved synthetic destinations and their exact principal and type, lease and defer intervals, and a trusted local invocation recorder. Grant `DISPATCH_PUBLISH_REFERENCE` to each configured principal under the usual ordered scope update and proof rules.
+
+`DispatchCoordinator.dispatchNext()` is the normal entry point. `DispatchStore.claim` and `DispatchCoordinator.dispatch` can split controlled worker steps using the exact returned claim. Claims and expected transitions use the complete destination, tenant, effect ID, attempt number, token and writer epoch. A retained claim is never a send permission. The worker independently proves the current scope and writer, checks ordered predecessors and cancellation, and resolves the exact original Publish association and receipt-derived effect identity before committing `ARMED`. The local recorder receives only the scoped attempt, request reference and revision.
+
+An expired unarmed claim becomes `EXPIRED_UNSENT`, allowing a new attempt. An expired armed attempt becomes `UNKNOWN` and blocks another claim for that effect. A completion must match a live lease, claim token, active writer and scoped local receipt. A commit error during arm keeps the coordinator from invoking the recorder. The B23 fixture models proof for a synthetic local recorder. B24 defines the external outcome and reconciliation contract.
+
+The ordered stream groups destination, tenant, request reference and trigger slot. A lower revision blocks a successor until the predecessor's current scoped attempt carries confirmation proof. Publish is terminal in the current workflow. An owner-controlled retained predecessor anchored to an actual earlier transition tests the ordering gate. The live successor still requires its own exact guarded Publish proof.

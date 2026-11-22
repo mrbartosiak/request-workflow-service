@@ -17,7 +17,8 @@ public final class JdbcWorkflowMigrations {
             "db/workflow/V006__effective_scope_access.sql", "db/workflow/V007__action_context_grants.sql",
             "db/workflow/V008__request_action_result_grants.sql", "db/workflow/V009__terminal_request_actions.sql",
             "db/workflow/V010__publish_grants.sql", "db/workflow/V011__detail_grants.sql",
-            "db/workflow/V012__history_grants.sql", "db/workflow/V013__browse_filter_grants.sql");
+            "db/workflow/V012__history_grants.sql", "db/workflow/V013__browse_filter_grants.sql",
+            "db/workflow/V014__dispatch_grants.sql");
 
     private final JdbcTransactionRunner runner;
     private final JdbcTemplate jdbc;
@@ -79,6 +80,11 @@ public final class JdbcWorkflowMigrations {
     /** Enables independent per-type browse filters and the organization-scoped seek. */
     public void migrateBrowse() {
         migrateThrough(13);
+    }
+
+    /** Enables the independently managed outbound reference grant. */
+    public void migrateDispatchGrants() {
+        migrateThrough(14);
     }
 
     void migrateThrough(int targetVersion) {

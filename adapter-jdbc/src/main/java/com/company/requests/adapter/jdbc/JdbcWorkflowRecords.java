@@ -160,6 +160,18 @@ public final class JdbcWorkflowRecords implements RequestStore, ExistingRequestS
     }
 
     @Override
+    public Optional<PublishedTarget> findPublishedTarget(PolicyGuard guard, RequestRef ref) {
+        JdbcTransactionRunner.requireGuard(dataSource, guard);
+        return jdbc.query("""
+                SELECT request_type, revision, publication_id FROM requests.request
+                WHERE organization = ? AND ref = ? AND state = 'PUBLISHED' AND publication_namespace = ?
+                """, (row, index) -> new PublishedTarget(guard.organization(), ref,
+                RequestType.valueOf(row.getString("request_type")), row.getLong("revision"),
+                new PublicationId(row.getLong("publication_id"))),
+                guard.organization().value(), ref.value(), PublicationId.INITIAL_NAMESPACE).stream().findFirst();
+    }
+
+    @Override
     public Optional<RequestBody> findRetainedBody(OrganizationId organization, RequestRef ref) {
         JdbcTransactionRunner.requireBoundConnection(dataSource);
         return jdbc.query("""
@@ -210,6 +222,16 @@ public final class JdbcWorkflowRecords implements RequestStore, ExistingRequestS
     public Optional<PolicyGuard> lockExclusive(OrganizationId organization) {
         var locked = lockGuard(organization, " FOR UPDATE");
         locked.ifPresent(guard -> JdbcTransactionRunner.rememberExclusiveGuard(dataSource, guard));
+        return locked;
+    }
+
+    /** Share-lock a guard through the worker role's narrow lock function. */
+    public Optional<PolicyGuard> lockDispatchGuard(OrganizationId organization) {
+        JdbcTransactionRunner.requireWorkerConnection(dataSource);
+        var locked = jdbc.query("SELECT policy_version FROM requests.lock_dispatch_guard(?)",
+                (row, index) -> new PolicyGuard(organization, row.getLong("policy_version")),
+                organization.value()).stream().findFirst();
+        locked.ifPresent(guard -> JdbcTransactionRunner.rememberSharedGuard(dataSource, guard));
         return locked;
     }
 
