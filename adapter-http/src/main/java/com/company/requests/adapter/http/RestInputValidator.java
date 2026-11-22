@@ -3,6 +3,7 @@ package com.company.requests.adapter.http;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
@@ -15,6 +16,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
@@ -25,6 +27,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import com.company.requests.adapter.http.RestInputException.Field;
 import com.company.requests.adapter.http.RestProblems.Code;
+import com.company.requests.application.evidence.RequestEvidenceEvent.Outcome;
 
 import static com.company.requests.adapter.http.RestInputException.Field.*;
 
@@ -231,8 +234,10 @@ public final class RestInputValidator {
                 throw new RestInputException(Code.REQUEST_TOO_LARGE, null, false);
             }
             return utf8(bytes);
-        } catch (IOException ex) {
+        } catch (CharacterCodingException | ZipException ex) {
             throw invalid(null);
+        } catch (IOException ex) {
+            throw transportInput(ex);
         }
     }
 
@@ -253,7 +258,7 @@ public final class RestInputValidator {
                 throw invalid(null);
             }
         } catch (IOException ex) {
-            throw invalid(null);
+            throw transportInput(ex);
         }
     }
 
@@ -345,5 +350,10 @@ public final class RestInputValidator {
 
     private static RestInputException invalid(Field field) {
         return new RestInputException(Code.INVALID_INPUT, field, false);
+    }
+
+    private static RestInputException transportInput(IOException failure) {
+        Outcome outcome = failure instanceof InterruptedIOException ? Outcome.TRANSPORT_TIMEOUT : Outcome.TRANSPORT_FAILURE;
+        return new RestInputException(Code.INVALID_INPUT, null, false, outcome);
     }
 }

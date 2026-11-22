@@ -1,7 +1,10 @@
 package com.company.requests.bootstrap;
 
+import com.company.requests.adapter.http.RequestEvidenceFilter;
 import com.company.requests.application.OperationSecrets;
 import com.company.requests.application.WriterEpoch;
+import com.company.requests.application.evidence.RequestEvidenceRecorder;
+import jakarta.servlet.DispatcherType;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -9,11 +12,15 @@ import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.LogManager;
+import java.util.logging.Logger;
 import org.apache.catalina.Lifecycle;
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.core.StandardContext;
@@ -24,6 +31,8 @@ import org.apache.catalina.core.StandardService;
 import org.apache.catalina.startup.Tomcat;
 import org.apache.catalina.valves.ErrorReportValve;
 import org.apache.coyote.http11.Http11NioProtocol;
+import org.apache.tomcat.util.descriptor.web.FilterDef;
+import org.apache.tomcat.util.descriptor.web.FilterMap;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import org.springframework.web.servlet.DispatcherServlet;
@@ -37,6 +46,10 @@ public final class SyntheticHttpMain {
             System.err.println("Usage: SyntheticHttpMain <port (0 for automatic)> <empty scratch directory>");
             System.exit(2);
         }
+        // The packaged standalone profile uses JUL for both Spring and Tomcat. Its default
+        // request diagnostics can contain the raw target or exception text.
+        LogManager.getLogManager().reset();
+        Logger.getLogger("").setLevel(Level.OFF);
         try (var input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
             int port = Integer.parseInt(args[0]);
             if (port < 0 || port > 65535) {
@@ -75,6 +88,9 @@ public final class SyntheticHttpMain {
         var engine = new StandardEngine();
         engine.setName("B08");
         engine.setDefaultHost("127.0.0.1");
+        var evidence = new RequestEvidenceRecorder(Clock.systemUTC(),
+                event -> System.out.println("request_evidence " + event.json()));
+        engine.getPipeline().addValve(new SyntheticConnectorEvidence(evidence));
         service.setContainer(engine);
         var host = new StandardHost();
         host.setName("127.0.0.1");
@@ -99,6 +115,7 @@ public final class SyntheticHttpMain {
             }
         });
         host.addChild(web);
+        addEvidenceFilter(web, evidence);
 
         try (var spring = new AnnotationConfigWebApplicationContext()) {
             spring.setServletContext(web.getServletContext());
@@ -130,6 +147,20 @@ public final class SyntheticHttpMain {
                 }
             }
         }
+    }
+
+    private static void addEvidenceFilter(StandardContext web, RequestEvidenceRecorder recorder) {
+        String name = "requestEvidence";
+        var definition = new FilterDef();
+        definition.setFilterName(name);
+        definition.setFilterClass(RequestEvidenceFilter.class.getName());
+        definition.setFilter(new RequestEvidenceFilter(recorder));
+        web.addFilterDef(definition);
+        var mapping = new FilterMap();
+        mapping.setFilterName(name);
+        mapping.setDispatcher(DispatcherType.REQUEST.name());
+        mapping.addURLPattern("/*");
+        web.addFilterMap(mapping);
     }
 
     private static SyntheticCreateConfiguration.Settings settings(BufferedReader input) throws IOException {

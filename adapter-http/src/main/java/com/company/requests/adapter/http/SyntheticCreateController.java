@@ -46,7 +46,7 @@ public final class SyntheticCreateController {
     public ResponseEntity<?> issue(HttpServletRequest request) {
         var actor = actors.resolveBearer(request, organization);
         if (actor.isEmpty()) {
-            return unauthenticated();
+            return unauthenticated(request);
         }
         inputs.keyIssuance(request);
         try {
@@ -54,9 +54,9 @@ public final class SyntheticCreateController {
             return ResponseEntity.status(201).contentType(JSON_UTF8)
                     .body(json.writeValueAsBytes(new Issued(issued.key(), issued.expiresAt().toString())));
         } catch (AccessDeniedException denied) {
-            return RestProblems.response(Code.ACTION_DENIED);
+            return RestProblems.response(request, Code.ACTION_DENIED);
         } catch (AuthorityUnavailableException unavailable) {
-            return RestProblems.response(Code.AUTHORITY_UNAVAILABLE);
+            return RestProblems.response(request, Code.AUTHORITY_UNAVAILABLE);
         }
     }
 
@@ -64,17 +64,17 @@ public final class SyntheticCreateController {
     public ResponseEntity<?> create(HttpServletRequest request) {
         var actor = actors.resolveBearer(request, organization);
         if (actor.isEmpty()) {
-            return unauthenticated();
+            return unauthenticated(request);
         }
-        return create(actor.orElseThrow(), inputs.create(request));
+        return create(request, actor.orElseThrow(), inputs.create(request));
     }
 
-    private ResponseEntity<?> create(AuthenticatedActor actor, RestInputs.Create input) {
+    private ResponseEntity<?> create(HttpServletRequest request, AuthenticatedActor actor, RestInputs.Create input) {
         var intent = new IntentDigest.Create(RequestType.valueOf(input.type()), input.name(), input.body());
         try {
             return switch (creates.execute(actor, input.key(), intent, this::encode)) {
                 case CreateCommand.Released released -> response(released.envelope());
-                case CreateCommand.Rejection rejection -> RestProblems.response(switch (rejection) {
+                case CreateCommand.Rejection rejection -> RestProblems.response(request, switch (rejection) {
                     case CONCEALED -> Code.NOT_FOUND;
                     case CONFLICT -> Code.KEY_CONFLICT;
                     case EXPIRED -> Code.KEY_EXPIRED;
@@ -83,12 +83,12 @@ public final class SyntheticCreateController {
                 });
             };
         } catch (AccessDeniedException denied) {
-            return RestProblems.response(Code.NOT_FOUND);
+            return RestProblems.response(request, Code.NOT_FOUND);
         } catch (AuthorityUnavailableException unavailable) {
-            return RestProblems.response(Code.AUTHORITY_UNAVAILABLE);
+            return RestProblems.response(request, Code.AUTHORITY_UNAVAILABLE);
         } catch (OperationKeyException key) {
-            return key.reason() == OperationKeyException.Reason.EXPIRED ? RestProblems.response(Code.KEY_EXPIRED)
-                    : RestProblems.response(Code.INVALID_INPUT, RestInputException.Field.KEY, HttpHeaders.EMPTY);
+            return key.reason() == OperationKeyException.Reason.EXPIRED ? RestProblems.response(request, Code.KEY_EXPIRED)
+                    : RestProblems.response(request, Code.INVALID_INPUT, RestInputException.Field.KEY, HttpHeaders.EMPTY);
         }
     }
 
@@ -113,10 +113,10 @@ public final class SyntheticCreateController {
                 .contentType(JSON_UTF8).body(body);
     }
 
-    private static ResponseEntity<?> unauthenticated() {
+    private static ResponseEntity<?> unauthenticated(HttpServletRequest request) {
         var headers = new HttpHeaders();
         headers.set(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
-        return RestProblems.response(Code.AUTHENTICATION_REQUIRED, null, headers);
+        return RestProblems.response(request, Code.AUTHENTICATION_REQUIRED, null, headers);
     }
 
     private record Issued(String key, String expiresAt) { }

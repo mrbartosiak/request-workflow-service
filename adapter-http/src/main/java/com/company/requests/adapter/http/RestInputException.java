@@ -1,6 +1,7 @@
 package com.company.requests.adapter.http;
 
 import com.company.requests.adapter.http.RestProblems.Code;
+import com.company.requests.application.evidence.RequestEvidenceEvent.Outcome;
 
 final class RestInputException extends RuntimeException {
     enum Field {
@@ -21,12 +22,18 @@ final class RestInputException extends RuntimeException {
     private final Code code;
     private final Field field;
     private final boolean unsupportedEncoding;
+    private final Outcome outcome;
 
     RestInputException(Code code, Field field, boolean unsupportedEncoding) {
+        this(code, field, unsupportedEncoding, code.outcome());
+    }
+
+    RestInputException(Code code, Field field, boolean unsupportedEncoding, Outcome outcome) {
         super(code.name());
         this.code = code;
         this.field = field;
         this.unsupportedEncoding = unsupportedEncoding;
+        this.outcome = outcome;
     }
 
     Code code() {
@@ -39,5 +46,9 @@ final class RestInputException extends RuntimeException {
 
     boolean unsupportedEncoding() {
         return unsupportedEncoding;
+    }
+
+    Outcome outcome() {
+        return outcome;
     }
 }
