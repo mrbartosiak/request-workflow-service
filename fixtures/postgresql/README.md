@@ -12,8 +12,8 @@ $implementation = (Resolve-Path 'fixtures/postgresql').Path
 $phase = Join-Path $workspace 'tmp/phase5-development'
 $fixture = Join-Path $phase 'b04-fixture'
 $settings = Join-Path $phase 'b01-tools/m2/settings.xml'
-$cache = Join-Path $fixture 'm2/repository'
-$classpathFile = Join-Path $fixture 'm2/classpath.txt'
+$cache = Join-Path $fixture 'm2/qualified-repository'
+$classpathFile = Join-Path $fixture 'm2/qualified-classpath.txt'
 $runs = Join-Path $fixture 'runs'
 $bin = Join-Path $fixture 'runtime/pgsql/bin'
 $env:JAVA_HOME = Join-Path $phase 'b01-tools/temurin/jdk-25.0.5.1+2'
@@ -34,7 +34,7 @@ $classpath = (Get-Content -Raw -LiteralPath $classpathFile).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL qualification failed' }
 ```
 
-The B04 Maven cache can be initialized by copying B01's adopted `m2/patched-repository` to the new isolated `m2/repository` path. If the exact driver artifacts are missing, the same resolution command without `-o` fetches them from Maven Central under the approved G1-Q network scope. Keep `-C`, `-s` and `-gs` in both modes. Use a process scope that can connect to its own loopback postmasters. A restricted shell may report `pg_isready` no response even after the server log shows a loopback listener.
+The B04 Maven cache can be initialized by copying the adopted B03 integration `repository` to the new isolated `m2/qualified-repository` path. It contains B01's BeanUtils 1.11.0 pin for Dependency Plugin 3.10.0, which this fixture POM also applies to the standalone plugin realm. If the exact driver artifacts are missing, the same resolution command without `-o` fetches them from Maven Central under the approved G1-Q network scope. Keep `-C`, `-s` and `-gs` in both modes. Use a process scope that can connect to its own loopback postmasters. A restricted shell may report `pg_isready` no response even after the server log shows a loopback listener.
 
 The probe prints `PASS B04 PostgreSQL qualification and teardown` after every assertion and successful shutdown. Raw native command logs, server logs, the verified physical backup and all data directories stay inside the run directory. The fixture generates separate transient credentials. The initialization password files are removed, and PostgreSQL stores SCRAM verifiers inside its scratch data and backup. Treat the raw fixture directories as private workspace artifacts.
 
