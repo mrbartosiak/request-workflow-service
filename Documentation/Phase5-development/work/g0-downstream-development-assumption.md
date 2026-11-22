@@ -1,0 +1,7 @@
+# Phase 5 downstream development assumption
+
+The owner directed the coordinator to proceed with Phase 5 development on the planning assumption that B29, B35 and B36 passed. The assumption opens downstream design, implementation and local offline checks under the standing G0 scope. It supplies no native test result or independent qualification verdict. The three original records retain their observed outcomes. [Standing G0](g0-remaining-plan-approval.md) · [Phase 5 ledger](ledger.md)
+
+The exact local and GitHub integration baseline is B42 `b489f38f7d35fefbb0156fc32d52e274cb17beee`. `PH4-PLAN-r1` and all 30 manifest entries verified at SHA-256 `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6`. B27 and B30 begin in separate worktrees and may develop against the documented B29 successor contracts. Evidence and integration decisions identify their actual scope. [B42 publication](g0-publication-b489f38.md) · [B29 successor handoff](../../../tmp/phase5-development/b29-recovery-epoch-v3/Documentation/Phase5-development/work/B29/handoff.md)
+
+The owner confirmed the positive planning disposition for B29, B35 and B36 and directed the coordinator to move to the next task when a test triggers a platform flag. Use the assumption to sequence downstream work. A skipped test retains its actual evidence status. Start B28 on the independently reviewed B27 local candidate and use ordinary functional checks for the new extensions. [B27 offline review](B27/review-762b499.md) · [B28 assignment](B28/assignment.md)

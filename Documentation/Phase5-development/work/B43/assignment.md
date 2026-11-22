@@ -1,0 +1,7 @@
+# B43 execution assignment · Advisory and critical quality evidence
+
+**Entry** B01 and B02 are integrated. Wait for exact B45 approval and integration before dispatch. Use a fresh isolated `codex/b43-release-evidence` worktree from the approved head. Sol xhigh (56) implements and Astra xhigh (62) reviews. Use the established offline Java and Maven build pins and existing version-resolved dependency tree outputs. Coordinate any new tool, download or threshold policy under the applicable approval. [Standing G0](../g0-remaining-plan-approval.md) · [Acceptance](../../../Phase4-development-planning/operating-verification.md#b43--security-advisory-and-critical-quality-controls--e7)
+
+**Oracle** Build a reproducible inventory of resolved direct and transitive artifacts. Record dated findings or no applicable findings from the approved advisory sources with affected versions, local exposure, evidence and disposition. Seed missing or stale review, applicable unresolved exposed high, documented unexposed critical, and a complex or under-covered critical method. Apply the reference cases and distinguish measured results from gaps in available evidence. Keep compulsory gates and production exception authority within separate approval. [Advisory and quality direction](../../../Phase3-LLD/operations.md) · [Quality acceptance](../../../Phase1-conceptual/quality-acceptance.md)
+
+**Return** Exact reproducible evidence and review disposition for the chosen local scope, with tool, dates, coverage and threshold status, source links, and handoff for B48, B55 and B56.

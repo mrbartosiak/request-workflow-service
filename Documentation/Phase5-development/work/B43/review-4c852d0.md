@@ -1,0 +1,34 @@
+# B43 independent review of local release evidence
+
+**Approved for the scoped local evidence stage** at `4c852d01172aa3119b08635a1676254fc691b211`. Both release rehearsals have an **incomplete advisory review**. The three approved Lifecycle methods meet the reference quality thresholds. Wider critical-path verification remains open. Sol xhigh (56) executed the stage and Astra xhigh (62) independently reviewed it on 23 November 2026, Europe/Warsaw. [Assignment](assignment.md) · [B43 acceptance](../../../Phase4-development-planning/operating-verification.md#b43--security-advisory-and-critical-quality-controls--e7)
+
+## Source and build
+
+The candidate tree is `a0ee244037559f679faa6acad1c18008fc8f53ee`. Its sole parent is published B24 `e550379a754a686b85903d233c9d7d2061bd5d7a`. Both Git dates are 22 November 2026 at 22:49 Warsaw. An independent archive matched all 690 Git blobs. The six additions matched the executor's path, blob and SHA-256 manifest and its frozen byte copies. The plan seal `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6` and all 30 entries verified. The candidate evidence SHA-256 is `bd64f345900f3817a4978952fdf131b8b694989f38d5bcf8d56f0f19af19e36c`. [Independent source check](../../../../tmp/phase5-development/b43-independent/source-check.log) · [Frozen six-file manifest](../../../../tmp/phase5-development/b43-release-evidence-run/b24-final/precommit-paths.tsv) · [Executor handoff](../../../../tmp/phase5-development/b43-release-evidence-run/b24-final/review-handoff.txt)
+
+The independent builds used Temurin `25.0.5.1+2`, Maven `3.9.16`, a private copy of the qualified repository and the pinned settings. Both ran `-o -B -C -ntp clean verify` in sequence from the exact archive. Each succeeded across 11 reactor projects. The suite-level Maven lines and Surefire XML totals agreed, with zero failures, errors or skips. [Tool versions](../../../../tmp/phase5-development/b43-independent/versions.log) · [Default transcript](../../../../tmp/phase5-development/b43-independent/build-evidence/default.log) · [Synthetic HTTP transcript](../../../../tmp/phase5-development/b43-independent/build-evidence/synthetic-http.log)
+
+| Profile | Tests / suites | Resolved rows | External coordinates | Module tree inputs |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 436 / 20 | 119 | 27 | 11 |
+| Synthetic HTTP | 436 / 20 | 121 | 29 | 11 |
+
+A separate traversal of each build's raw Maven JSON reproduced the complete rows, paths, scopes, direct/transitive flags and tree hashes. All six output files matched the executor's digests. Removing the domain tree and substituting the parent tree each caused the exporter to fail before creating output. Restoring the domain tree reproduced all three profile exports. The 10 project JARs in each build contained zero B43 fixture classes. [Default result](../../../../tmp/phase5-development/b43-independent/build-evidence/default-check.log) · [Synthetic HTTP result](../../../../tmp/phase5-development/b43-independent/build-evidence/synthetic-http-check.log) · [Independent inventory controls](../../../../tmp/phase5-development/b43-independent/inventory-controls.log)
+
+## Advisory evidence and reference decisions
+
+The 23 November ledger accounts for all **29 distinct coordinates** across both profiles. Positive evidence for zero direct findings was recorded on two exact Snyk pages and four exact version rows. The remaining **23** lack exact-version confirmation, including **21** in the default inventory. The independent review reconciled the dated local records, versions and source links with the rebuilt inventories. The recorded Spring Framework ranges end before the resolved 7.0.11. The synthetic HTTP profile adds two Tomcat 11.0.29 coordinates. The documented Tomcat advisory includes the selected core version. Its affected TLS-PSK clustering facility is unexposed in the current loopback, TLS-disabled launcher. The build/security lead retains that finding for topology changes and both Tomcat Maven lookups remain open. [Dated ledger](../../../../tmp/phase5-development/b43-independent/candidate/Documentation/Phase5-development/work/B43/snyk-lookups.tsv) · [Advisory analysis](../../../../tmp/phase5-development/b43-independent/candidate/Documentation/Phase5-development/work/B43/advisory-review.md) · [Inherited Tomcat evidence](../B08/http-runtime-inputs.md)
+
+All 18 seeded dispositions replayed with the exact transcript digest `ba9014bb7b7b2eded52e37845eef047e5d0f89b4cccfd75b66990ddffaeba8fb`. Missing, stale, mismatched and partial reviews blocked. An unresolved, exposed high finding blocked, and the documented unexposed critical case was tracked. The seeded Java method exercised 11 of 22 outcomes at complexity 12 and escalated on both measures. The actual review of each configuration blocks a release under the incomplete-review reference case. The evidence owner must resolve the exact-version gaps with the build/security lead and refresh both sources on the weekly and prerelease schedule for the actual release inventory. [Replayed cases](../../../../tmp/phase5-development/b43-independent/reference-cases.log) · [Advisory and quality direction](../../../Phase3-LLD/operations.md)
+
+## Instrumented Lifecycle result
+
+The approval receipt, official archive, agent and CLI digests matched their pins. With JaCoCo `0.8.16`, a new offline `LifecycleTest` run passed all 156 tests. Its exact class matched SHA-256 `1edaeca805f6d6204533a65b623d6fa210fd051697b876c17c6e1a0855e8d955`. The independently generated XML and the executor's XML agreed on every selected branch and complexity counter. [Owner approval](coverage-approval.md) · [Independent targeted run](../../../../tmp/phase5-development/b43-independent/build-evidence/coverage.log) · [Independent JaCoCo XML](../../../../tmp/phase5-development/b43-independent/build-evidence/Lifecycle.xml)
+
+| Method | Covered / total branches | Cyclomatic complexity |
+| --- | ---: | ---: |
+| `nextFromStart` | 2 / 2 | 2 |
+| `next` | 2 / 2 | 2 |
+| `transition` | 5 / 5 | 4 |
+
+The three-method sample covered **9/9 branches** and each method met the reference ceiling of 10. Selection and measurement of the broader critical paths, including validation, access, replay, history, browsing and the concurrency, migration and release cases, remain open. B48 may use these local results with the gaps attached. B55 and B56 require target-specific operating evidence, complete release reviews and separate decisions on thresholds, compulsory gates and exception authority under G6-M and G7. The 24-entry independent evidence manifest has SHA-256 `069055c9271d7609950c26a267279901d15e9d2f0153525e3232602ffe23268e`. [Quality acceptance](../../../Phase1-conceptual/quality-acceptance.md#q-07-cyclomatic-complexity-and-testing) · [Independent evidence manifest](../../../../tmp/phase5-development/b43-independent/review-evidence.sha256)

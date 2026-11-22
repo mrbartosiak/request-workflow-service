@@ -1,0 +1,9 @@
+# B35 execution evidence
+
+B35 is verification-only. The initial isolated worktree uses B22 `59be818e2596462a4eb2ab95d7e9e209d56b7d4f`, tree `c5a1c1e738fb7feb212b410d7897a5899171fa9d`. The private sources, oracle and runner are under `fixtures/postgresql/b35/`. [Assignment](assignment.md) · [Fixture instructions](../../../../tmp/phase5-development/b35-state-namespace-races/fixtures/postgresql/b35/README.md)
+
+## Port-free checkpoint
+
+Temurin 25 compiled the fixture against the recorded B22 review packages. The runner matched all 30 JARs to their recorded SHA-256 digests before reuse. The runtime scan found one packaged request action controller and zero fixture controls. The B22 offline default and synthetic HTTP builds each passed 339 tests. [B22 default build](../../../../tmp/phase5-development/b22-review-59be818/logs/default-verify.log) · [B22 synthetic HTTP build](../../../../tmp/phase5-development/b22-review-59be818/logs/synthetic-verify.log) · [Packaged runtime digests](../../../../tmp/phase5-development/b22-review-59be818/logs/runtime-sha256.csv)
+
+Nine focused controls rejected a missing blocker, extra blocker, wrong native lock, extra loser receipt, second replay registration, reversed numeric order, JSON numeric ID, rounded decimal string and a private class added to the release classpath. The positive decimal control accepted the exact signed 64-bit maximum string. The B22 control transcript SHA-256 is `73b7b109071a75ca5ce9ef22547c22985c9f2b0b3b9a1c69178e04736033ec99`. A preliminary repeat against the B21 executor's recorded packages passed the same controls. Both checkpoints opened zero PostgreSQL or HTTP listeners. [B22 controls](../../../../tmp/phase5-development/b35-fixture/logs/b35-port-free-02-controls.log) · [Preliminary B21 controls](../../../../tmp/phase5-development/b35-fixture/logs/b35-b21-port-free-01-controls.log)

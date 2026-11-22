@@ -1,0 +1,7 @@
+# B42 execution assignment · Protected log spool and safe drain
+
+**Entry** B41 is integrated. Wait for exact B25 approval and integration. Use a fresh `codex/b42-protected-spool` worktree from the coordinator's pinned head. Sol xhigh (56) implements and Astra xhigh (62) reviews. Own the synthetic logging spool, its private fixture and corresponding opt-in composition. Coordinate any shared HTTP, worker or bootstrap changes. Use existing Java/Maven pins and the qualified synthetic fixture following explicit approval where needed. [Standing G0](../g0-remaining-plan-approval.md) · [Acceptance](../../../Phase4-development-planning/operating-verification.md#b42--protected-spool-fault-admission-and-drain--e7) · [B41 integration](../B41/integration.md)
+
+**Oracle** Exercise sink outage, spool pressure, separate edge rejection evidence, restart and ordered bounded drain. Compare ingress, real synthetic outbound sends, safe error and durable outcome records. Use the accepted reference 128 MiB protected spool and 60% alert and 80% restriction, with reserve headroom. Keep protected inputs out of log records and preserve separate REST and worker admission. Report any loss of evidence and the resulting stop-routing policy. [Operations](../../../Phase3-LLD/operations.md) · [Accepted delivery](../../../Phase3-LLD/integration.md)
+
+**Return** Exact reproducible local evidence for fault admission, bounded drain, sanitized log contents and safety counts. Hand fixture pressures and restart observations to B44, B49 and B55. G7 retains the production-policy disposition.

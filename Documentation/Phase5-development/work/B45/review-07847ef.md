@@ -1,0 +1,29 @@
+# B45 independent re-review · 07847ef
+
+**Changes required.** Astra xhigh (62) reviewed Sol xhigh (56) candidate `07847efef24b60c7179c7fe379856a2077f99e9f`, tree `dc8fbaad8b1a7e49f02e336759127c22ce5d8cd8`, sole parent `6ffc8cbbfa43b08087aa6205f45908cf6305ab6f`. Both Git dates are 22 November 2026 at 22:47 Warsaw time. The corrected response masks and missing-`info` check pass. One gap in how the tests compare the OpenAPI authentication requirement with Spring still blocks the B46 baseline. [Assignment](assignment.md) · [First review](review-501a891.md) · [B45 acceptance](../../../Phase4-development-planning/tool-pilots.md#b45--unversioned-api-and-explicit-adapters)
+
+## Blocking finding
+
+**The tests accept a contract that declares Create open to anonymous callers.** The exact candidate describes HTTP bearer authentication for all 12 operations, and all 12 real MVC handlers challenge an anonymous caller. At lines 70–71, the contract check reads the scheme and looks for the `BearerAuth` key in the first root requirement. It does not verify the required security-scheme type or each operation's effective security requirement. Two independent, single-change controls passed. [Contract test](../../../../tmp/phase5-development/b45-independent-v2/source/bootstrap/src/test/java/com/company/requests/bootstrap/OpenApiContractTest.java) · [OpenAPI source](../../../../tmp/phase5-development/b45-independent-v2/source/adapter-http/src/main/openapi/requests.yaml)
+
+| Change to an isolated copy of the exact spec | Result |
+| --- | --- |
+| Removed `components.securitySchemes.BearerAuth.type` | All 76 B45 cases passed, although the named security scheme lacks a mandatory OpenAPI field. An additional independent test confirmed the verifier accepted that document. [Transcript](../../../../tmp/phase5-development/b45-independent-v2/independent-controls.log) |
+| Restored the exact spec, then set only `paths["/requests"].post.security` to `[]` | All 76 B45 cases passed. The valid OpenAPI override removes authentication from the documented Create operation. The actual unauthenticated Create still returned 401 with its Bearer challenge. [Transcript](../../../../tmp/phase5-development/b45-independent-v2/anonymous-create-control.log) |
+
+Check the adopted security scheme is an object with `type: http` and `scheme: bearer`. For each of the 12 operations, resolve its own `security` value when present and otherwise use the root value. Compare that effective requirement with the project's single `BearerAuth` requirement and empty scope list. This admits an equivalent local override and rejects an anonymous operation or alternative. Keep both demonstrated mutations as negative controls. The fix belongs in the existing offline contract checks. [REST authentication and problem contract](../../../Phase3-LLD/rest.md) · [T1-R spec validation](../../../Phase3-LLD/tooling.md)
+
+## Verified corrections and exact evidence
+
+- **Projection masks.** The shared schema conditions cover Detail and Browse. An independent matrix checked all six visible states with and without an ID, a missing state with the maximum string ID, and each of the four forbidden fields on a visible deleted projection. The corrected real MVC cases exercised the independently granted ID with hidden state, the deleted rows, and the created and verified rows. The first finding is closed. [Matrix transcript](../../../../tmp/phase5-development/b45-independent-v2/independent-controls.log)
+- **Document metadata.** A missing `info` now fails in the normal document check. The suite also rejects absent title or version, a malformed Info Object, missing operation responses, a missing response description and an unresolved reference. Both executor red transcripts matched their recorded SHA-256 values. [Correction evidence](../../../../tmp/phase5-development/b45-independent-v2/source/Documentation/Phase5-development/work/B45/evidence.md)
+- **Provenance.** The five changed paths contain the OpenAPI source, three test classes and the execution evidence. The accepted manifest and its 30 entries matched. The independent archive SHA-256 was `3191463d2433d7ac14000468eb7f646cef8f31fb43677560e63b18c1e1f180fc`. Independent JSON and YAML parsers produced the same document, with 11 paths and 12 operations. The canonical UTF-8 LF spec digest was `ebc002385b46c1f54d278eb51eebcfb3865f4299833f64631733a0aad89a9560`. All 17 execution-evidence links resolved inside the exact archive. The reviewed B05/B22 evidence carries forward from the first review.
+
+Independent builds used a fresh commit archive, Temurin 25.0.5.1+2, Maven 3.9.16, the B01 settings and the qualified cache. Both strict offline runs used `-o -B -C -ntp`. The native fixture and deployment scopes remain with their owning tickets.
+
+| Run | Result | Transcript SHA-256 |
+| --- | --- | --- |
+| `clean verify` | 431 passed in 19 suites, including 76 B45 cases. Zero failures, errors or skips. | [`f63a0177d12e193016881d54ef9be7020f80e1191702f69430fd5670ca047a8d`](../../../../tmp/phase5-development/b45-independent-v2/default.log) |
+| `-Psynthetic-http clean verify` | 431 passed in 19 suites, including 76 B45 cases. Zero failures, errors or skips. | [`93f8c445749e85ab94ef2be80245514fcda6d3e48a33adab955c46e35dc1ed4d`](../../../../tmp/phase5-development/b45-independent-v2/synthetic.log) |
+| Missing scheme type, projection matrix and missing Info Object | 76 B45 cases and one independent probe passed. | [`dc8f9bb28599ba8b28a6911cc5c087c92859571d73d9c50ba13fc33e001a48a2`](../../../../tmp/phase5-development/b45-independent-v2/independent-controls.log) |
+| Anonymous Create override | All 76 B45 cases passed with the mismatched contract. | [`1cf781b54970b10492b638ec0f96aaea73558d75f739bd42d175e107d016777b`](../../../../tmp/phase5-development/b45-independent-v2/anonymous-create-control.log) |

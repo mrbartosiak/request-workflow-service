@@ -1,0 +1,7 @@
+# B25 integration of durable destination slots
+
+Local `main` fast-forwarded from approved B43 `4c852d01172aa3119b08635a1676254fc691b211` to B25 `87f8da7090936393808139bf1cd368739214b7bb`, tree `d15b2b7f0b11e2f4a80af0b95ce92babfd40a676`. The integrated strict offline synthetic HTTP build passed all 436 tests in 20 suites with zero failures, errors or skips. Build SHA-256 `45071921880e2846fdc4379d50723731290cdc7f5c03e7ac8ba73b956499451f`. [Independent approval](review-87f8da7.md) SHA-256 `d171b39ca05f325a3e8e560f3dd0d03160a2052ee15d419abd1e9c4a7c2a80b4` · [Integrated build](../../../../tmp/phase5-development/wave2-integrated/logs/b25-profile-clean-verify.log)
+
+The exact two-JVM fixture verified durable occupancy after expiry, connector completion, bounded resumption, cooldown, retry and REST isolation. The independent offline controls verified workflow session loss, delayed duplicate claims and completion-write uncertainty. Two calls whose completion cannot be established retain both slots for their destination until there is trusted evidence of quiescence. Other destinations can progress. [Native qualification](native-87f8da7.md) · [Owner-approved publication](../g0-publication-87f8da7.md)
+
+B42 receives the four-worker scheduled entry point and pressure fixture. B28 and B31 receive the scoped occupancy, retry and cooldown semantics. [B42 assignment](../B42/assignment.md) · [Outbound handoff requirements](../../../Phase4-development-planning/outbound.md#b25--scheduling-and-destination-backpressure)

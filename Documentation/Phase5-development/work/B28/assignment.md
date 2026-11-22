@@ -1,0 +1,7 @@
+# B28 extension conformance
+
+**Entry** B20, B21 and B25 are integrated. Start the offline B28 stage in `codex/b28-extension-conformance` at independently reviewed B27 `762b499243b7e741ee2db132dc51c1442bc04d8e`. Published B42 is the B27 parent. Sol xhigh (56) implements and Astra xhigh (62) reviews. Use the accepted plan and owner’s positive planning disposition for previously interrupted tests. [Planning disposition](../g0-downstream-development-assumption.md) · [B28 acceptance](../../../Phase4-development-planning/inbound.md#b28--swap-fake-connector-and-add-an-approval-policy)
+
+**Oracle** Compose a test approval policy through the existing workflow ports. Require an additional permitted fact for Accept and show how its version affects an existing action context. Substitute a second synthetic connector through the existing delivery ports and verify stable scoped idempotency, async and missed-notice reconciliation, exact retries, restart continuity and delivery hold behavior with controlled fixture data. Exercise existing functional suites. [E5 and E6](../../../Phase3-LLD/verification.md) · [Module boundaries](../../../Phase3-LLD/wiring.md) · [B25 delivery handoff](../B25/integration.md)
+
+**Return** Record exact sources, exercised normal entry points, counts, module and contract changes, release and migration impact, and synthetic connector assumptions. Retain the observed evidence status for unrun cases. Hand reviewed extension evidence to B48 and B54.

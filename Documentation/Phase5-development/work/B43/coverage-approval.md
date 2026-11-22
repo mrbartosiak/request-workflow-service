@@ -1,0 +1,5 @@
+# B43 owner approval for local branch measurement
+
+On 23 November 2026 the owner directly approved a local Java 25 coverage measurement for the three B43 Lifecycle methods using the official JaCoCo `0.8.16` scratch package and existing tests. The official archive matched published SHA-256 `a7b90535b30a7159dab62d8db0b276ed1f7bc73b7c2354d314503cd34b9c00ba`. [Exact request](coverage-request.md) · [Release index](https://www.jacoco.org/jacoco/) · [Official checksum](https://www.jacoco.org/jacoco/download/jacoco-0.8.16.zip.sha256.txt)
+
+The selected `jacocoagent.jar` and `jacococli.jar` were extracted into `tmp/phase5-development/b43-tools/v0.8.16`. They matched SHA-256 `37ae2f374ad77e85c59c6e5b46565226c3ac3cb460ac19de0bcb844ac2f43e33` and `1f2a806225623fbd9f53d1ee0e42a6975323de0adebe01c12fc464ed147d756a` respectively. The CLI reported `0.8.16.202610240946` under the approved Temurin. The measurement stays in local scratch and feeds the reference B43 comparison. Compulsory gate adoption retains its separate disposition.
