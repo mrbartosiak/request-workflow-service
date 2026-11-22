@@ -145,8 +145,20 @@ public final class JdbcTransactionRunner implements TransactionRunner {
         requireCommand(dataSource);
     }
 
+    static void rememberSharedGuard(DataSource dataSource, PolicyGuard guard) {
+        requireCommand(dataSource).guards.put(guard.organization(), guard);
+    }
+
+    static void requireGuard(DataSource dataSource, PolicyGuard guard) {
+        if (!guard.equals(requireCommand(dataSource).guards.get(guard.organization()))) {
+            throw new IllegalStateException("Effective authority requires this transaction's organization guard.");
+        }
+    }
+
     static void rememberExclusiveGuard(DataSource dataSource, PolicyGuard guard) {
-        requireCommand(dataSource).exclusiveGuards.put(guard.organization(), guard);
+        var command = requireCommand(dataSource);
+        command.guards.put(guard.organization(), guard);
+        command.exclusiveGuards.put(guard.organization(), guard);
     }
 
     static void requireExclusiveGuard(DataSource dataSource, PolicyGuard guard) {
@@ -185,6 +197,7 @@ public final class JdbcTransactionRunner implements TransactionRunner {
     private static final class CommandConnection {
         private final DataSource dataSource;
         private final ConnectionHolder holder;
+        private final Map<OrganizationId, PolicyGuard> guards = new HashMap<>();
         private final Map<OrganizationId, PolicyGuard> exclusiveGuards = new HashMap<>();
         private Attempt scopeAttempt;
 

@@ -114,7 +114,9 @@ public final class JdbcWorkflowRecords implements RequestStore, PolicyGuardStore
 
     @Override
     public Optional<PolicyGuard> lockShared(OrganizationId organization) {
-        return lockGuard(organization, " FOR SHARE");
+        var locked = lockGuard(organization, " FOR SHARE");
+        locked.ifPresent(guard -> JdbcTransactionRunner.rememberSharedGuard(dataSource, guard));
+        return locked;
     }
 
     @Override

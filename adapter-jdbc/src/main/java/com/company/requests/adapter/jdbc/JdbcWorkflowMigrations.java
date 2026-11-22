@@ -13,7 +13,8 @@ public final class JdbcWorkflowMigrations {
             "db/workflow/V001__policy_guard.sql", "db/workflow/V002__local_records.sql",
             "db/workflow/V003__create_claim_and_assignment.sql",
             "db/workflow/V004__scope_authority_witness.sql",
-            "db/workflow/V005__scope_authority_projection.sql");
+            "db/workflow/V005__scope_authority_projection.sql",
+            "db/workflow/V006__effective_scope_access.sql");
 
     private final JdbcTransactionRunner runner;
     private final JdbcTemplate jdbc;
@@ -34,7 +35,12 @@ public final class JdbcWorkflowMigrations {
 
     /** Enables the guarded current-authority projection after the witness migration. */
     public void migrateScopeProjection() {
-        migrateThrough(SCRIPTS.size());
+        migrateThrough(5);
+    }
+
+    /** Explicitly installs mutable synthetic grants and visibility facts. */
+    public void migrateEffectiveScopeAccess() {
+        migrateThrough(6);
     }
 
     void migrateThrough(int targetVersion) {

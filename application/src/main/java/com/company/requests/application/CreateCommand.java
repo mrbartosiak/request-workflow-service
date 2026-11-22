@@ -2,6 +2,7 @@ package com.company.requests.application;
 
 import com.company.requests.application.OperationKeyIssuer.Eligibility;
 import com.company.requests.application.OperationKeyIssuer.VerifiedKey;
+import com.company.requests.application.ScopeAuthority.Admission;
 import com.company.requests.domain.Action;
 import com.company.requests.domain.Lifecycle;
 import com.company.requests.domain.RequestBody;
@@ -57,8 +58,11 @@ public final class CreateCommand {
     public record Released(byte[] envelope) implements Result { }
 
     public OperationKeyIssuer.IssuedKey issue(AuthenticatedActor actor) {
-        var admission = access.requireKeyIssue(actor);
         try {
+            if (access.usesEffectiveScope()) {
+                return transactions.run(() -> keys.issue(actor, access.requireKeyIssueOnCommand(actor)));
+            }
+            var admission = access.requireKeyIssue(actor);
             return transactions.run(() -> {
                 lineage.requireCurrent(admission);
                 return keys.issue(actor);
@@ -71,32 +75,41 @@ public final class CreateCommand {
     public Result execute(AuthenticatedActor actor, String signedKey, IntentDigest.Create intent,
                           Function<OperationReceipt, byte[]> encode) {
         long started = System.nanoTime();
-        var admission = access.requireCreate(actor, intent.type());
         try {
-            var key = transactions.run(() -> {
-                lineage.requireCurrent(admission);
+            var immutableAdmission = access.usesEffectiveScope() ? null : access.requireCreate(actor, intent.type());
+            var verified = transactions.run(() -> {
+                var current = immutableAdmission;
+                if (current == null) {
+                    current = access.requireCreateOnCommand(actor, intent.type());
+                } else {
+                    lineage.requireCurrent(current);
+                }
                 requireBudget(started);
-                return keys.verify(signedKey, actor, admission);
+                return new AuthorizedKey(current, keys.verify(signedKey, actor, current));
             });
+            var key = verified.key();
             if (key.eligibility() == Eligibility.ACTIVE_CAN_EXECUTE) {
                 try {
                     transactions.run(() -> {
-                        arbitrate(actor, key, intent, started);
+                        arbitrate(actor, key, intent, verified.admission(), started);
                         return null;
                     });
                 } catch (CommitOutcomeUnknownException uncertain) {
                     // The next phase can prove and release the effect. It never executes Create again.
                 }
             }
-            return resolve(actor, key, intent, admission, encode, started);
+            return resolve(actor, key, intent, verified.admission(), encode, started);
         } catch (CommitOutcomeUnknownException | TransactionBusyException | TransactionResourceUnavailableException
                  | ExecutionWindowClosed unavailable) {
             return Rejection.OUTCOME_UNKNOWN;
         }
     }
 
-    private void arbitrate(AuthenticatedActor actor, VerifiedKey key, IntentDigest.Create intent, long started) {
-        var admission = access.requireCreate(actor, intent.type());
+    private void arbitrate(AuthenticatedActor actor, VerifiedKey key, IntentDigest.Create intent,
+                           Admission verifiedAdmission, long started) {
+        // Effective submitted access was proved under a shared guard in the completed verification transaction.
+        // Claim the receipt before this transaction takes the exclusive guard. The claim is still tentative.
+        var admission = access.usesEffectiveScope() ? verifiedAdmission : access.requireCreate(actor, intent.type());
         lineage.requireCurrent(admission);
         if (keys.recheck(key, actor, admission) != Eligibility.ACTIVE_CAN_EXECUTE) {
             return;
@@ -112,7 +125,9 @@ public final class CreateCommand {
         requireEffectWindow(key, actor, admission, started);
         var reservation = identities.reserve(admission, UUID.randomUUID());
         admission = access.requireCreate(actor, intent.type(), guard);
-        lineage.requireCurrent(admission);
+        if (!access.usesEffectiveScope()) {
+            lineage.requireCurrent(admission);
+        }
         requireEffectWindow(key, actor, admission, started);
         var person = actor.person().orElseThrow();
         var effect = Lifecycle.create(new Lifecycle.Creation(reservation.ref(), intent.type(), actor.organization(),
@@ -130,13 +145,16 @@ public final class CreateCommand {
     }
 
     private Result resolve(AuthenticatedActor actor, VerifiedKey key, IntentDigest.Create intent,
-                           ScopeAuthority.Admission admission, Function<OperationReceipt, byte[]> encode,
+                           Admission admission, Function<OperationReceipt, byte[]> encode,
                            long started) {
         var buffer = new ReleaseBuffer(ReleaseBuffer.MAX_BYTES);
         boolean past = key.generation() < admission.writer().generation();
         var foundTrusted = new boolean[1];
         GuardedRelease.Outcome outcome = release.handoffCreate(actor, intent.type(), () -> {
-            lineage.requireCurrent(admission);
+            // The mutable access gate verifies the bound writer at each guarded authorization check.
+            if (!access.usesEffectiveScope()) {
+                lineage.requireCurrent(admission);
+            }
             if (!keys.isFresh(key)) {
                 return false;
             }
@@ -188,7 +206,7 @@ public final class CreateCommand {
         };
     }
 
-    private void requireEffectWindow(VerifiedKey key, AuthenticatedActor actor, ScopeAuthority.Admission admission,
+    private void requireEffectWindow(VerifiedKey key, AuthenticatedActor actor, Admission admission,
                                      long started) {
         if (keys.recheck(key, actor, admission) != Eligibility.ACTIVE_CAN_EXECUTE) {
             throw new ExecutionWindowClosed();
@@ -201,6 +219,8 @@ public final class CreateCommand {
             throw new ExecutionWindowClosed();
         }
     }
+
+    private record AuthorizedKey(Admission admission, VerifiedKey key) { }
 
     private static final class ExecutionWindowClosed extends RuntimeException { }
 }

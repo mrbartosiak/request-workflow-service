@@ -1,5 +1,6 @@
 package com.company.requests.application;
 
+import com.company.requests.application.EffectiveScopeUpdates.Permission;
 import com.company.requests.domain.OrganizationId;
 import com.company.requests.domain.PersonId;
 import com.company.requests.domain.RequestType;
@@ -19,6 +20,7 @@ import java.util.Set;
 public final class SyntheticScopePolicy {
     private final ScopeAuthority.Genesis genesis;
     private final Map<Principal, Grant> grants;
+    private final Map<Principal, Set<Permission>> mutationOperators;
 
     public SyntheticScopePolicy(OrganizationId organization, long version, Collection<Grant> entries) {
         Map<Principal, Grant> byPrincipal = new HashMap<>();
@@ -29,7 +31,66 @@ public final class SyntheticScopePolicy {
             }
         }
         grants = Map.copyOf(byPrincipal);
+        mutationOperators = null;
         genesis = new ScopeAuthority.Genesis(organization, version, fingerprint(organization, version));
+    }
+
+    private SyntheticScopePolicy(ScopeAuthority.Genesis genesis, Map<Principal, Grant> grants,
+                                 Map<Principal, Set<Permission>> mutationOperators) {
+        this.genesis = genesis;
+        this.grants = grants;
+        this.mutationOperators = mutationOperators;
+    }
+
+    /** Certifies the immutable B10 operator rights alongside the ordinary directory and grants. */
+    public SyntheticScopePolicy withMutationOperators(Map<AuthenticatedActor, Set<Permission>> operators) {
+        if (mutationOperators != null) {
+            throw new IllegalStateException("Scope mutation operators are already bound.");
+        }
+        Map<Principal, Set<Permission>> bound = new HashMap<>();
+        operators.forEach((actor, permissions) -> {
+            if (actor.person().isEmpty() || !genesis.organization().equals(actor.organization())) {
+                throw new IllegalArgumentException("Scope operators require an authenticated local human binding.");
+            }
+            grant(actor);
+            var exact = Set.copyOf(permissions);
+            if (!exact.isEmpty()) {
+                bound.put(Principal.of(actor), exact);
+            }
+        });
+        var digest = sha256();
+        add(digest, "requests.synthetic-scope.effective-operators.v1");
+        add(digest, genesis.policyDigest());
+        bound.entrySet().stream().sorted(Map.Entry.comparingByKey(Principal.ORDER)).forEach(entry -> {
+            add(digest, entry.getKey().issuer());
+            add(digest, entry.getKey().id());
+            for (Permission permission : Permission.values()) {
+                add(digest, permission.name());
+                add(digest, Boolean.toString(entry.getValue().contains(permission)));
+            }
+        });
+        var effective = new ScopeAuthority.Genesis(genesis.organization(), genesis.policyVersion(),
+                HexFormat.of().formatHex(digest.digest()));
+        return new SyntheticScopePolicy(effective, grants, Map.copyOf(bound));
+    }
+
+    boolean permitsMutation(AuthenticatedActor actor, Permission permission) {
+        if (mutationOperators == null) {
+            return false;
+        }
+        var principal = Principal.of(actor);
+        var granted = grants.get(principal);
+        return granted != null && granted.actor().equals(actor)
+                && mutationOperators.getOrDefault(principal, Set.of()).contains(permission);
+    }
+
+    boolean permits(EffectiveScopeStore.GrantKey key) {
+        Grant configured = grant(key.actor());
+        return switch (key.grant()) {
+            case KEY_ISSUE -> configured.keyIssue();
+            case CREATE -> configured.create().contains(key.type().orElseThrow());
+            case CREATE_RESULT -> configured.createResult().contains(key.type().orElseThrow());
+        };
     }
 
     public ScopeAuthority.Genesis genesis() {
@@ -54,12 +115,7 @@ public final class SyntheticScopePolicy {
     }
 
     private String fingerprint(OrganizationId organization, long version) {
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException failure) {
-            throw new IllegalStateException("SHA-256 unavailable", failure);
-        }
+        var digest = sha256();
         add(digest, "requests.synthetic-scope.genesis.v1");
         add(digest, organization.value());
         add(digest, Long.toString(version));
@@ -78,6 +134,14 @@ public final class SyntheticScopePolicy {
                     }
                 });
         return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static MessageDigest sha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException failure) {
+            throw new IllegalStateException("SHA-256 unavailable", failure);
+        }
     }
 
     private static void add(MessageDigest digest, String value) {

@@ -75,7 +75,7 @@ public final class GuardedRelease {
         var receipt = loadCommitted.get().filter(value -> isScopedCreate(value, actor));
         var target = receipt.flatMap(original -> requests.find(actor.organization(), original.resultRef()))
                 .filter(request -> request.state() != RequestState.DELETED
-                        && access.permitsCreateResult(actor, request.type()));
+                        && access.permitsCreateResult(actor, guard, request));
         Outcome candidate = Outcome.WITHHELD;
         byte[] payload = null;
         if (target.isPresent()) {
@@ -88,7 +88,7 @@ public final class GuardedRelease {
         }
 
         access.requireCreate(actor, submittedType, guard);
-        if (target.isPresent() && !access.permitsCreateResult(actor, target.get().type())) {
+        if (target.isPresent() && !access.permitsCreateResult(actor, guard, target.get())) {
             candidate = Outcome.WITHHELD;
         }
         // Preparation and proof use independent connections. A lost local session has lost its guard.

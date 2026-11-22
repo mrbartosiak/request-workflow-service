@@ -44,13 +44,15 @@ public final class JdbcScopeAuthorityWitnesses implements ScopeAuthorityWitnessS
             throw new AuthorityUnavailableException();
         }
         var writer = attempt.admission().writer();
-        jdbc.update("""
+        if (jdbc.update("""
                 INSERT INTO requests.scope_authority_witness (
                     organization, sequence, attempt_id, writer_id, generation, before_version, after_version,
                     delta_digest, workflow_transaction
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, pg_current_xact_id())
                 """, attempt.admission().genesis().organization().value(), prepared.sequence().orElseThrow(),
                 attempt.id(), writer.writerId(), writer.generation(), attempt.beforeVersion(), attempt.afterVersion(),
-                attempt.deltaDigest());
+                attempt.deltaDigest()) != 1) {
+            throw new AuthorityUnavailableException();
+        }
     }
 }

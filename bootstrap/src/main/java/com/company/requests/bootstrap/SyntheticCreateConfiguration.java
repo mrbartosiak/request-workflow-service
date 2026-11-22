@@ -18,7 +18,7 @@ import com.company.requests.application.OperationSecrets;
 import com.company.requests.application.SyntheticScopePolicy;
 import com.company.requests.application.TrustedTime;
 import com.company.requests.application.WriterEpoch;
-import com.company.requests.domain.OrganizationId;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -56,18 +56,23 @@ public class SyntheticCreateConfiguration {
     SyntheticCreateController syntheticCreateController(Settings settings, RestInputValidator inputs) {
         var transactions = JdbcTransactionRunner.forCreate(settings.command());
         var requests = new JdbcWorkflowRecords(settings.command());
+        var authority = new JdbcSyntheticAuthority(settings.proof());
+        var access = new CurrentAccess(authority, settings.writer(), List.of(settings.policy()));
+        return new SyntheticCreateController(settings.policy().genesis().organization(), settings.actors(), inputs,
+                createCommand(settings, transactions, requests, access));
+    }
+
+    static CreateCommand createCommand(Settings settings, JdbcTransactionRunner transactions,
+                                      JdbcWorkflowRecords requests, CurrentAccess access) {
         var receipts = new JdbcReceiptStore(settings.command());
         var workflow = new JdbcWorkflowIdentity(settings.command());
         var authority = new JdbcSyntheticAuthority(settings.proof());
         var proof = new JdbcCreateProof(settings.proof());
-        var access = new CurrentAccess(authority, settings.writer(), List.of(settings.policy()));
         var keys = new OperationKeyIssuer(access, settings.clock(), settings.secrets(),
                 OperationKeyIssuer.REFERENCE_ADMISSION_MARGIN);
         var release = new GuardedRelease(transactions, requests, requests, access, Duration.ofMillis(2400));
-        var create = new CreateCommand(transactions, requests, requests, receipts, receipts, access,
+        return new CreateCommand(transactions, requests, requests, receipts, receipts, access,
                 admission -> proof.requireWriter(admission, workflow.current()), authority, keys,
                 new IntentDigest(settings.secrets()), proof, release);
-        OrganizationId organization = settings.policy().genesis().organization();
-        return new SyntheticCreateController(organization, settings.actors(), inputs, create);
     }
 }

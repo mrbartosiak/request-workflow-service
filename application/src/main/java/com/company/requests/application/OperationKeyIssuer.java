@@ -31,7 +31,10 @@ public final class OperationKeyIssuer {
     }
 
     public IssuedKey issue(AuthenticatedActor actor) {
-        var admission = access.requireKeyIssue(actor);
+        return access.withKeyIssue(actor, admission -> issue(actor, admission));
+    }
+
+    IssuedKey issue(AuthenticatedActor actor, ScopeAuthority.Admission admission) {
         Instant issuedAt = now();
         Instant expiresAt;
         try {
