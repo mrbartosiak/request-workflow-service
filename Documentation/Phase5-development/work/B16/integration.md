@@ -1,0 +1,7 @@
+# B16 integration and publication journal handoff
+
+`main` and `origin/main` advanced from `4c449f91216149b43c55360bdd2e82efe75932f1` to the independently approved revision `ed9ed3aca45abc25c493bf65a02a33623dd92899`, tree `a620303684b73f4fb0e47e9e1022501eabd39f8f`. Both Git dates were 22:27 for the implementation and 22:28 for the correction on 2026-11-22 Warsaw time. [Independent review](review.md)
+
+The integrated strict offline `-Psynthetic-http clean verify` passed 320 tests in 10 suites across 11 modules, with zero failures, errors, or skips. Log SHA-256 `777bb34e543375447decb7a2444b411ef437275f2de9828a99c866b79a2d8e52`. The independent PostgreSQL run verified exact registered-attempt binding, global reservation order, burn on rollback, signed-64-bit exhaustion, and original-lineage confirmation. All owned fixture processes stopped and the three ports were released. [Integrated build](../../../../tmp/phase5-development/wave2-integrated/logs/b16-profile-clean-verify.log) · [Native evidence](review.md#independent-verification)
+
+B17 receives the verified gate-issued attempt, independent reservation and terminal journal operations, and the command-transaction witness. B29 receives the current-epoch and original-lineage limits. B37 receives the separate registration, reservation, and terminal decision records for recovery evidence. [Successor handoff](review.md#successor-handoff)

@@ -1,0 +1,7 @@
+# B32 integration and harness handoff
+
+Local `main` fast-forwarded from the owner's documentation commit `031de2466e2dcb2b595262e81a241589083f9891` to B32 `5ff39f4ecbe12547a05dfbcab80739410de1185b`, tree `91fe10607d7703a2a0be6621ba2865d339ab5d8c`. Exact requalification SHA-256 `4d16070fe7b5ae868a481b108e7ead84bbe3e7e440ca0a573b6e7baa8c0e88f5` verified that all 135 tracked build, source, test and fixture entries matched the independently exercised revision. The B32 commits use 22:12 and 22:13 Warsaw time on 2026-11-22. [Exact requalification](review-5ff39f4.md) · [Independent live review](review.md)
+
+The integrated strict offline `-Psynthetic-http clean verify` passed 320 tests in 10 suites. Log SHA-256 `7aa9a671725a02a25e7f6c87181c3056605e6b62ac490b0cf4092df84fc38505`. Independent PostgreSQL runs verified two disjoint application processes with separate bounded pools, a true database blocker, loser 503, exact winner/replay 201 across restart, isolated precommit and prerelease cuts, clean teardown and B41 records. One intervening run timed out during proof setup before workers started. Both fixture ports were clear after every run. [Integrated build](../../../../tmp/phase5-development/wave2-integrated/logs/b32-profile-clean-verify.log) · [Existing live proof](review.md)
+
+B33–B40 receive the deterministic fixture controller, private launch controls, distinct bounded connection pools and read-only observers. [Harness instructions](../../../../fixtures/postgresql/b32/README.md)

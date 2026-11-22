@@ -1,0 +1,5 @@
+# Corrected B11 candidate on the dated B32 base
+
+The coordinator replayed the two-commit B11 patch from `af9eddf15e3f5cfc625a36b8ba09110b6425cead` onto integrated B32 `5ff39f4ecbe12547a05dfbcab80739410de1185b`. Exact candidate `4c449f91216149b43c55360bdd2e82efe75932f1`, tree `55e21e9010e383480d7c205e9b3d053695aba987`, on `codex/b11-resolver-on-b32`. The coordinator verified disjoint patch paths, equal complete binary diffs, original Sol authorship, clean worktree and passing whitespace checks. The replayed commits use 22:14 and 22:15 Warsaw time on 2026-11-22 for both Git dates, as requested by the owner. [Original candidate](evidence.md) · [Corrected execution](evidence-af9eddf.md) · [Initial review](review-6fa09f4.md)
+
+The integrated B41 evidence layer, documentation relocation and B32 fixture are part of the new base. The independently reviewed B11 privilege finding requires exact native checks on this combined revision. Frozen earlier reports retain their original paths and digests.
