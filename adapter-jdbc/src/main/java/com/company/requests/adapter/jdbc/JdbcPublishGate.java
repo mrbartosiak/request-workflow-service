@@ -2,6 +2,7 @@ package com.company.requests.adapter.jdbc;
 
 import com.company.requests.application.AuthorityUnavailableException;
 import com.company.requests.application.OperationReceipt;
+import com.company.requests.application.OutboundObligation;
 import com.company.requests.application.PolicyGuard;
 import com.company.requests.application.PublicationJournal;
 import com.company.requests.application.PublicationJournal.Attempt;
@@ -136,6 +137,18 @@ public final class JdbcPublishGate implements PublishGate {
                 || !held.attempt().ref().equals(ref) || held.attempt().resultRevision() != resultRevision) {
             throw new IllegalStateException("The publication update requires the original command's namespace gate.");
         }
+    }
+
+    static void requireOutboxTarget(DataSource workflow, OutboundObligation obligation) {
+        JdbcTransactionRunner.requireBoundConnection(workflow);
+        if (!(TransactionSynchronizationManager.getResource(HELD_GATE) instanceof Held held)
+                || !held.attempt().organization().equals(obligation.tenant())
+                || !OutboundObligation.effectIdentity(held.attempt().receiptIdentity(), obligation.triggerSlot())
+                        .equals(obligation.effectId())) {
+            throw new IllegalStateException("The obligation requires the original, scoped Publish effect.");
+        }
+        requireHeld(workflow, held.guard(), obligation.ref(), obligation.revision());
+        JdbcTransactionRunner.requireExclusiveGuard(workflow, held.guard());
     }
 
     private record Target(RequestType type, long revision) {

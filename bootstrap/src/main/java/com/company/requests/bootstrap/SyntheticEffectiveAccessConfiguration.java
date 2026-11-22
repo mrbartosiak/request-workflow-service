@@ -11,6 +11,7 @@ import com.company.requests.adapter.http.SyntheticRequestActionController;
 import com.company.requests.adapter.http.SyntheticRequestDetailController;
 import com.company.requests.adapter.http.SyntheticRequestHistoryController;
 import com.company.requests.adapter.jdbc.JdbcEffectiveScopeStore;
+import com.company.requests.adapter.jdbc.JdbcOutboxAppender;
 import com.company.requests.adapter.jdbc.JdbcPublicationConfirmationStore;
 import com.company.requests.adapter.jdbc.JdbcPublishGate;
 import com.company.requests.adapter.jdbc.JdbcReceiptStore;
@@ -37,6 +38,7 @@ import com.company.requests.application.RequestHistoryQuery;
 import com.company.requests.application.ScopeAuthorityMutation;
 import com.company.requests.application.ScopeProofResolver;
 import com.company.requests.application.SyntheticScopePolicy;
+import com.company.requests.domain.RequestType;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -58,7 +60,8 @@ public class SyntheticEffectiveAccessConfiguration {
     public record Settings(SyntheticCreateConfiguration.Settings create, DataSource preparation,
                            DataSource originalObserver, DataSource projection, DataSource resolver,
                            Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators,
-                           Optional<ObservationCodec.Keys> observationKeys, boolean publicationEnabled) {
+                           Optional<ObservationCodec.Keys> observationKeys, boolean publicationEnabled,
+                           Optional<PublishOutboxTrigger> publishOutbox) {
         public Settings(SyntheticCreateConfiguration.Settings create, DataSource preparation,
                         DataSource originalObserver, DataSource projection, DataSource resolver,
                         Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators) {
@@ -72,11 +75,23 @@ public class SyntheticEffectiveAccessConfiguration {
             this(create, preparation, originalObserver, projection, resolver, operators, observationKeys, false);
         }
 
+        public Settings(SyntheticCreateConfiguration.Settings create, DataSource preparation,
+                        DataSource originalObserver, DataSource projection, DataSource resolver,
+                        Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators,
+                        Optional<ObservationCodec.Keys> observationKeys, boolean publicationEnabled) {
+            this(create, preparation, originalObserver, projection, resolver, operators, observationKeys,
+                    publicationEnabled, Optional.empty());
+        }
+
         public Settings {
             Objects.requireNonNull(create);
             Objects.requireNonNull(observationKeys);
+            Objects.requireNonNull(publishOutbox);
             if (publicationEnabled && (observationKeys.isEmpty() || create.guardedReplay().isEmpty())) {
                 throw new IllegalArgumentException("Publish requires observation keys and guarded replay.");
+            }
+            if (!publicationEnabled && publishOutbox.isPresent()) {
+                throw new IllegalArgumentException("An outbound Publish trigger requires Publish to be enabled.");
             }
             var sources = List.of(create.command(), create.proof(), preparation, originalObserver, projection, resolver);
             Set<DataSource> distinct = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -98,6 +113,9 @@ public class SyntheticEffectiveAccessConfiguration {
         }
     }
 
+    /** Trusted fixture configuration for an outbound reference to one published request type. */
+    public record PublishOutboxTrigger(RequestType type, String destination) { }
+
     public record Components(CurrentAccess access, CreateCommand create, EffectiveScopeUpdates updates,
                              ScopeProofResolver resolver, Optional<ActionContextService> actionContext,
                              Optional<RequestActionCommand> requestActions,
@@ -117,7 +135,9 @@ public class SyntheticEffectiveAccessConfiguration {
         var workflow = new JdbcWorkflowIdentity(command);
         var publisher = settings.publicationEnabled() ? Optional.of(new RequestActionCommand.PublishExecution(
                 new JdbcPublishGate(command),
-                new JdbcPublicationJournal(settings.preparation(), settings.preparation(), settings.originalObserver())))
+                new JdbcPublicationJournal(settings.preparation(), settings.preparation(), settings.originalObserver()),
+                settings.publishOutbox().map(trigger -> new RequestActionCommand.PublishOutbox(trigger.type(),
+                        trigger.destination(), new JdbcOutboxAppender(command)))))
                 : Optional.<RequestActionCommand.PublishExecution>empty();
         var gate = new EffectiveScopeGate(journal.confirmedAuthority(),
                 admission -> proof.requireWriter(admission, workflow.current()), store);

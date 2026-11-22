@@ -1,6 +1,6 @@
 package com.company.requests.application;
 
-/** B22 append boundary. Implementations join the transaction holding the command's exclusive guard. */
+/** Appends one pending obligation on the owned command transaction under its exclusive guard. */
 @FunctionalInterface
 public interface OutboxAppendPort {
     void append(OutboundObligation obligation);

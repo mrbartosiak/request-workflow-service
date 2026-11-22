@@ -12,6 +12,7 @@ import com.company.requests.domain.PublicationId;
 import com.company.requests.domain.Request;
 import com.company.requests.domain.RequestBody;
 import com.company.requests.domain.RequestRef;
+import com.company.requests.domain.RequestType;
 import com.company.requests.domain.TransitionFact;
 import com.company.requests.domain.TransitionReason;
 import java.util.Objects;
@@ -163,23 +164,29 @@ public final class RequestActionCommand {
             }
         }
         var scopeEdit = policy.visibilityChange(submitted.action(), request, verified.visibility());
+        OperationReceipt receipt;
         if (scopeEdit.isPresent()) {
             var change = new EffectiveScopeChange(guard, actor, scopeEdit.orElseThrow());
-            scopeMutation.apply(admission, guard, new ScopeAuthorityMutation.Plan<>(change.delta(), prepared -> {
+            receipt = scopeMutation.apply(admission, guard, new ScopeAuthorityMutation.Plan<>(change.delta(), prepared -> {
                 requireEffectWindow(actor, key, admission, started);
-                applyEffect(actor, submitted, key, digest, verified);
+                var applied = applyEffect(actor, submitted, key, digest, verified);
                 scope.apply(guard, prepared, change);
-                return null;
-            }));
+                return applied;
+            })).result();
         } else {
-            applyEffect(actor, submitted, key, digest, verified);
+            receipt = applyEffect(actor, submitted, key, digest, verified);
+        }
+        if (submitted.action() == Action.PUBLISH) {
+            publication.orElseThrow().outbox().filter(trigger -> trigger.type() == request.type()).ifPresent(trigger ->
+                    trigger.appender().append(OutboundObligation.publishReference(trigger.destination(), receipt,
+                            keys.requireFreshInstant(key))));
         }
         lineage.requireCurrent(admission);
         requireEffectWindow(actor, key, admission, started);
     }
 
-    private void applyEffect(AuthenticatedActor actor, Submission submitted, VerifiedKey key,
-                             ReceiptIntentDigest digest, Verified verified) {
+    private OperationReceipt applyEffect(AuthenticatedActor actor, Submission submitted, VerifiedKey key,
+                                         ReceiptIntentDigest digest, Verified verified) {
         var guard = verified.guard();
         var before = verified.request();
         Request after;
@@ -213,6 +220,7 @@ public final class RequestActionCommand {
                 submitted.action(), after.ref(), after.revision(), after.state(), after.publicationId(), 200);
         claims.finalizeReceipt(receipt);
         reserved.ifPresent(entry -> publication.orElseThrow().gate().appendWitness(entry, receipt));
+        return receipt;
     }
 
     private Entry reserve(Verified verified, VerifiedKey key) {
@@ -262,10 +270,24 @@ public final class RequestActionCommand {
     private record Submission(Action action, RequestRef ref, String observation, IntentDigest.Intent intent) { }
 
     /** Command-side publication dependencies. Resolution is held on a separate private path. */
-    public record PublishExecution(PublishGate gate, PublicationJournal journal) {
+    public record PublishExecution(PublishGate gate, PublicationJournal journal, Optional<PublishOutbox> outbox) {
+        public PublishExecution(PublishGate gate, PublicationJournal journal) {
+            this(gate, journal, Optional.empty());
+        }
+
         public PublishExecution {
             Objects.requireNonNull(gate);
             Objects.requireNonNull(journal);
+            Objects.requireNonNull(outbox);
+        }
+    }
+
+    /** Opt-in Publish trigger for one trusted synthetic request type and destination. */
+    public record PublishOutbox(RequestType type, String destination, OutboxAppendPort appender) {
+        public PublishOutbox {
+            Objects.requireNonNull(type);
+            OutboundObligation.requireDestination(destination);
+            Objects.requireNonNull(appender);
         }
     }
 
