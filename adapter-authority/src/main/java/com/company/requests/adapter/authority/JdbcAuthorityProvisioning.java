@@ -2,18 +2,23 @@ package com.company.requests.adapter.authority;
 
 import com.company.requests.application.AuthorityUnavailableException;
 import com.company.requests.application.ScopeAuthority.Genesis;
+import com.company.requests.application.ScopeAuthorityResolution.Operation;
+import com.company.requests.application.ScopeAuthorityResolution.OperatorCredential;
 import com.company.requests.application.WriterEpoch;
 import com.company.requests.application.WriterLineage.Identity;
+import com.company.requests.domain.OrganizationId;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import javax.sql.DataSource;
 
 /** Explicit setup for an immutable synthetic proof slice, using the independent schema owner. */
 public final class JdbcAuthorityProvisioning {
     private static final List<String> MIGRATIONS = List.of(
-            "V001__synthetic_authority.sql", "V002__create_proof.sql", "V003__scope_authority_journal.sql");
+            "V001__synthetic_authority.sql", "V002__create_proof.sql", "V003__scope_authority_journal.sql",
+            "V004__scope_authority_resolver.sql");
     private final ProofTransactions transactions;
 
     public JdbcAuthorityProvisioning(DataSource independentMigrationDataSource) {
@@ -26,7 +31,64 @@ public final class JdbcAuthorityProvisioning {
 
     /** Explicit qualification for deployments with effective scope proof. */
     public void migrateScopeJournal() {
+        migrateThrough(3);
+    }
+
+    /** Enables the private, audited resolver on top of the independent scope journal. */
+    public void migrateScopeResolver() {
         migrateThrough(MIGRATIONS.size());
+    }
+
+    /** Configure one synthetic operator decision for one certified scope using an independent 256-bit token. */
+    public void authorizeScopeOperator(UUID id, OperatorCredential credential, OrganizationId scope,
+                                       Operation operation) {
+        byte[] digest = JdbcScopeAuthorityResolver.credentialDigest(credential);
+        if (digest == null) {
+            throw new IllegalArgumentException("A resolver token must be base64url with 43 characters.");
+        }
+        transactions.run(false, connection -> {
+            try (var operator = connection.prepareStatement("""
+                    INSERT INTO request_authority.scope_resolver_operator (operator_id, credential_digest)
+                    VALUES (?, ?) ON CONFLICT (operator_id) DO NOTHING
+                    """);
+                 var grant = connection.prepareStatement("""
+                    INSERT INTO request_authority.scope_resolver_grant (operator_id, organization, operation)
+                    SELECT operator_id, ?, ? FROM request_authority.scope_resolver_operator
+                    WHERE operator_id = ? AND credential_digest = ? ON CONFLICT DO NOTHING
+                    """)) {
+                operator.setObject(1, id);
+                operator.setBytes(2, digest);
+                operator.executeUpdate();
+                grant.setString(1, scope.value());
+                grant.setString(2, operation.name());
+                grant.setObject(3, id);
+                grant.setBytes(4, digest);
+                if (grant.executeUpdate() == 0) {
+                    requireExistingResolverGrant(connection, id, digest, scope, operation);
+                }
+            }
+            return null;
+        });
+    }
+
+    private static void requireExistingResolverGrant(java.sql.Connection connection, UUID id, byte[] digest,
+                                                      OrganizationId scope, Operation operation)
+            throws java.sql.SQLException {
+        try (var query = connection.prepareStatement("""
+                SELECT 1 FROM request_authority.scope_resolver_grant g
+                JOIN request_authority.scope_resolver_operator o USING (operator_id)
+                WHERE g.operator_id = ? AND o.credential_digest = ? AND g.organization = ? AND g.operation = ?
+                """)) {
+            query.setObject(1, id);
+            query.setBytes(2, digest);
+            query.setString(3, scope.value());
+            query.setString(4, operation.name());
+            try (var rows = query.executeQuery()) {
+                if (!rows.next()) {
+                    throw new AuthorityUnavailableException();
+                }
+            }
+        }
     }
 
     private void migrateThrough(int target) {

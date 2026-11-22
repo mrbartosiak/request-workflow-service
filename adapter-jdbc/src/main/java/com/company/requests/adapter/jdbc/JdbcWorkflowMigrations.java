@@ -12,7 +12,8 @@ public final class JdbcWorkflowMigrations {
     private static final List<String> SCRIPTS = List.of(
             "db/workflow/V001__policy_guard.sql", "db/workflow/V002__local_records.sql",
             "db/workflow/V003__create_claim_and_assignment.sql",
-            "db/workflow/V004__scope_authority_witness.sql");
+            "db/workflow/V004__scope_authority_witness.sql",
+            "db/workflow/V005__scope_authority_projection.sql");
 
     private final JdbcTransactionRunner runner;
     private final JdbcTemplate jdbc;
@@ -28,6 +29,11 @@ public final class JdbcWorkflowMigrations {
 
     /** Explicit qualification for deployments with effective scope proof. */
     public void migrateScopeWitnesses() {
+        migrateThrough(4);
+    }
+
+    /** Enables the guarded current-authority projection after the witness migration. */
+    public void migrateScopeProjection() {
         migrateThrough(SCRIPTS.size());
     }
 

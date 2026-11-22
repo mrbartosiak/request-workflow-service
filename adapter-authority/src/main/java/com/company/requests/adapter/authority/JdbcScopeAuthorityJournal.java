@@ -1,6 +1,7 @@
 package com.company.requests.adapter.authority;
 
 import com.company.requests.application.AuthorityUnavailableException;
+import com.company.requests.application.ConfirmedScopeAuthority;
 import com.company.requests.application.ScopeAuthority;
 import com.company.requests.application.ScopeAuthorityChange.Attempt;
 import com.company.requests.application.ScopeAuthorityChange.Delta;
@@ -9,11 +10,10 @@ import com.company.requests.application.ScopeAuthorityChange.LocalAttempt;
 import com.company.requests.application.ScopeAuthorityChange.State;
 import com.company.requests.application.ScopeAuthorityEvidence;
 import com.company.requests.application.ScopeAuthorityJournal;
-import com.company.requests.application.WriterLineage.Identity;
+import com.company.requests.application.ScopeCheckpoint;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -24,21 +24,48 @@ import javax.sql.DataSource;
 public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, ScopeAuthorityEvidence, ScopeAuthority {
     private static final HexFormat HEX = HexFormat.of();
     private static final String ENTRY = """
-            SELECT attempt_id, organization, generation, workflow_transaction::text,
+            SELECT attempt_id, organization, generation, workflow_transaction::text AS workflow_transaction_text,
                    before_version, after_version, delta_digest, sequence, state
             FROM request_authority.scope_journal_attempt
             """;
 
     private final ProofTransactions journal;
-    private final ProofTransactions originalWorkflow;
+    private final OriginalWorkflowProof originalWorkflow;
+    private final boolean confirmedProjection;
 
     public JdbcScopeAuthorityJournal(DataSource independentJournal, DataSource originalWorkflowObserver) {
+        this(independentJournal, originalWorkflowObserver, false);
+    }
+
+    public static JdbcScopeAuthorityJournal withConfirmedProjection(DataSource independentJournal,
+                                                                    DataSource originalWorkflowObserver) {
+        return new JdbcScopeAuthorityJournal(independentJournal, originalWorkflowObserver, true);
+    }
+
+    private JdbcScopeAuthorityJournal(DataSource independentJournal, DataSource originalWorkflowObserver,
+                                      boolean confirmedProjection) {
         journal = new ProofTransactions(independentJournal);
-        originalWorkflow = new ProofTransactions(originalWorkflowObserver);
+        originalWorkflow = new OriginalWorkflowProof(originalWorkflowObserver);
+        this.confirmedProjection = confirmedProjection;
+    }
+
+    public ConfirmedScopeAuthority confirmedAuthority() {
+        if (!confirmedProjection) {
+            throw new IllegalStateException("Confirmed scope projection has not been enabled.");
+        }
+        return admission -> journal.run(true, connection -> {
+            lockScope(connection, admission, true);
+            JdbcSyntheticAuthority.requireCurrent(connection, admission);
+            return requireProjection(connection, admission);
+        });
     }
 
     @Override
     public void requireCurrent(Admission admission) {
+        if (confirmedProjection) {
+            confirmedAuthority().requireCurrent(admission);
+            return;
+        }
         journal.run(true, connection -> {
             JdbcSyntheticAuthority.requireCurrent(connection, admission);
             var prefix = prefix(connection, admission);
@@ -62,10 +89,10 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
             if (prior.isPresent()) {
                 return requireExact(prior.get(), attempt);
             }
-            var prefix = prefix(connection, admission);
-            if (!prefix.contiguous() || prefix.unresolved() != 0 || prefix.committed() != 0
-                    || attempt.beforeVersion() != admission.genesis().policyVersion()
-                    || !"in progress".equals(originalStatus(connection, attempt))) {
+            long currentVersion = confirmedProjection ? requireProjection(connection, admission).policyVersion()
+                    : requireGenesisPrefix(connection, admission);
+            if (attempt.beforeVersion() != currentVersion
+                    || !"in progress".equals(originalWorkflow.status(connection, attempt))) {
                 throw new AuthorityUnavailableException();
             }
             try (var insert = connection.prepareStatement("""
@@ -102,7 +129,7 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
                 return prior;
             }
             var prefix = prefix(connection, admission);
-            if (!prefix.contiguous() || prefix.unresolved() != 1 || prefix.committed() != 0
+            if (!prefix.contiguous() || prefix.unresolved() != 1 || (!confirmedProjection && prefix.committed() != 0)
                     || prefix.head() == Long.MAX_VALUE) {
                 throw new AuthorityUnavailableException();
             }
@@ -160,6 +187,10 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
 
     @Override
     public Entry abort(Admission admission, UUID attemptId) {
+        if (confirmedProjection) {
+            // In the enabled deployment, terminal decisions go through the audited resolver.
+            throw new AuthorityUnavailableException();
+        }
         return journal.run(false, connection -> {
             lockAttemptAndScope(connection, admission, attemptId);
             JdbcSyntheticAuthority.requireCurrent(connection, admission);
@@ -167,66 +198,75 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
             if (entry.state() == State.ABORTED) {
                 return entry;
             }
-            if (entry.state() == State.COMMITTED || !"aborted".equals(originalStatus(connection, entry.attempt()))) {
+            if (entry.state() == State.COMMITTED || !"aborted".equals(originalWorkflow.status(connection, entry.attempt()))) {
                 throw new AuthorityUnavailableException();
             }
-            try (var update = connection.prepareStatement("""
-                    UPDATE request_authority.scope_journal_attempt SET state = 'ABORTED'
-                    WHERE attempt_id = ? AND state IN ('REGISTERED', 'PENDING')
-                    """)) {
-                update.setObject(1, attemptId);
-                requireOne(update.executeUpdate());
-            }
-            return new Entry(entry.attempt(), entry.sequence(), State.ABORTED);
+            return transition(connection, entry, State.ABORTED);
         });
     }
 
-    private String originalStatus(Connection proof, Attempt attempt) {
-        return originalWorkflow.run(true, workflow -> {
-            try (var statement = workflow.createStatement();
-                 var rows = statement.executeQuery("""
-                         SELECT host(inet_server_addr()), inet_server_port(), current_database(), pg_postmaster_start_time()
-                         WHERE NOT pg_is_in_recovery()
-                         """)) {
-                if (!rows.next() || rows.getString(1) == null) {
-                    throw new AuthorityUnavailableException();
-                }
-                var identity = new Identity(rows.getString(1), rows.getInt(2), rows.getString(3),
-                        rows.getObject(4, OffsetDateTime.class).toInstant());
-                JdbcCreateProof.requireWorkflow(proof, attempt.admission().writer(), identity);
-            }
-            try (var query = workflow.prepareStatement("SELECT pg_xact_status(CAST(? AS xid8))")) {
-                query.setString(1, attempt.workflowTransaction());
-                try (var rows = query.executeQuery()) {
-                    return rows.next() ? rows.getString(1) : null;
-                }
-            }
-        });
+    private ScopeCheckpoint requireProjection(Connection connection, Admission admission) throws SQLException {
+        var checkpoint = ScopeJournalCheckpoint.read(connection, admission);
+        originalWorkflow.requireProjection(connection, checkpoint);
+        return checkpoint;
+    }
+
+    private static long requireGenesisPrefix(Connection connection, Admission admission) throws SQLException {
+        var prefix = prefix(connection, admission);
+        if (!prefix.contiguous() || prefix.unresolved() != 0 || prefix.committed() != 0) {
+            throw new AuthorityUnavailableException();
+        }
+        return admission.genesis().policyVersion();
+    }
+
+    static Entry transition(Connection connection, Entry entry, State terminal) throws SQLException {
+        try (var update = connection.prepareStatement("""
+                UPDATE request_authority.scope_journal_attempt SET state = ?
+                WHERE attempt_id = ? AND state = ?
+                """)) {
+            update.setString(1, terminal.name());
+            update.setObject(2, entry.attempt().id());
+            update.setString(3, entry.state().name());
+            requireOne(update.executeUpdate());
+        }
+        return new Entry(entry.attempt(), entry.sequence(), terminal);
     }
 
     private static Optional<Entry> find(Connection connection, Admission admission, UUID id) throws SQLException {
         try (var query = connection.prepareStatement(ENTRY + "WHERE attempt_id = ?")) {
             query.setObject(1, id);
-            try (var rows = query.executeQuery()) {
-                return rows.next() ? Optional.of(readEntry(rows, admission)) : Optional.empty();
-            }
+            return find(query, admission);
         }
     }
 
-    private static Entry readEntry(ResultSet row, Admission admission) throws SQLException {
+    static Optional<Entry> findScoped(Connection connection, Admission admission, UUID id) throws SQLException {
+        try (var query = connection.prepareStatement(ENTRY + "WHERE attempt_id = ? AND organization = ?")) {
+            query.setObject(1, id);
+            query.setString(2, organization(admission));
+            return find(query, admission);
+        }
+    }
+
+    private static Optional<Entry> find(java.sql.PreparedStatement query, Admission admission) throws SQLException {
+        try (var rows = query.executeQuery()) {
+            return rows.next() ? Optional.of(readEntry(rows, admission)) : Optional.empty();
+        }
+    }
+
+    static Entry readEntry(ResultSet row, Admission admission) throws SQLException {
         if (!organization(admission).equals(row.getString("organization"))
                 || admission.writer().generation() != row.getLong("generation")) {
             throw new AuthorityUnavailableException();
         }
         var attempt = new Attempt(row.getObject("attempt_id", UUID.class), admission, row.getLong("before_version"),
                 row.getLong("after_version"), HEX.formatHex(row.getBytes("delta_digest")),
-                row.getString("workflow_transaction"));
+                row.getString("workflow_transaction_text"));
         long sequence = row.getLong("sequence");
         return new Entry(attempt, row.wasNull() ? OptionalLong.empty() : OptionalLong.of(sequence),
                 State.valueOf(row.getString("state")));
     }
 
-    private static Prefix prefix(Connection connection, Admission admission) throws SQLException {
+    static Prefix prefix(Connection connection, Admission admission) throws SQLException {
         try (var query = connection.prepareStatement("""
                 SELECT h.last_sequence, count(a.sequence), coalesce(max(a.sequence), 0),
                        count(*) FILTER (WHERE a.state IN ('REGISTERED', 'PENDING')),
@@ -247,12 +287,18 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
         }
     }
 
-    private static void lockAttemptAndScope(Connection connection, Admission admission, UUID id) throws SQLException {
+    static void lockAttemptAndScope(Connection connection, Admission admission, UUID id) throws SQLException {
         // The bigint and two-int advisory lock namespaces do not overlap.
-        try (var attempt = connection.prepareStatement("SELECT pg_advisory_xact_lock(hashtextextended(?, 19009))");
-             var scope = connection.prepareStatement("SELECT pg_advisory_xact_lock(19009, hashtext(?))")) {
+        try (var attempt = connection.prepareStatement("SELECT pg_advisory_xact_lock(hashtextextended(?, 19009))")) {
             attempt.setString(1, id.toString());
             attempt.execute();
+        }
+        lockScope(connection, admission, false);
+    }
+
+    private static void lockScope(Connection connection, Admission admission, boolean shared) throws SQLException {
+        String lock = shared ? "pg_advisory_xact_lock_shared" : "pg_advisory_xact_lock";
+        try (var scope = connection.prepareStatement("SELECT " + lock + "(19009, hashtext(?))")) {
             scope.setString(1, organization(admission));
             scope.execute();
         }
@@ -265,15 +311,15 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
         return entry;
     }
 
-    private static String organization(Admission admission) {
+    static String organization(Admission admission) {
         return admission.genesis().organization().value();
     }
 
-    private static void requireOne(int rows) {
+    static void requireOne(int rows) {
         if (rows != 1) {
             throw new AuthorityUnavailableException();
         }
     }
 
-    private record Prefix(long head, boolean contiguous, long unresolved, long committed) { }
+    record Prefix(long head, boolean contiguous, long unresolved, long committed) { }
 }

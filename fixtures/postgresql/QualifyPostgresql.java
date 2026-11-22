@@ -43,6 +43,8 @@ public final class QualifyPostgresql {
     private final Role workflowObserver = new Role("b04_observer");
     private final Role proofObserver = new Role("b04_observer");
     private final Role workflowBackup = new Role("b04_backup");
+    private final Role workflowResolver = new Role("b11_projection");
+    private final Role proofResolver = new Role("b11_resolver");
     private final Cluster workflow;
     private final Cluster proof;
     private final Cluster restore;
@@ -171,17 +173,22 @@ public final class QualifyPostgresql {
     }
 
     static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check) throws Exception {
-        workflowAndProof(args, ticket, check, null);
+        workflowAndProof(args, ticket, check, null, null);
     }
 
     static void scopeProofAndRestore(String[] args, ScopeProofCheck check) throws Exception {
-        workflowAndProof(args, "b09", null, check);
+        workflowAndProof(args, "b09", null, check, null);
+    }
+
+    static void scopedResolverAndRestore(String[] args, ScopeResolverCheck check) throws Exception {
+        workflowAndProof(args, "b11", null, null, check);
     }
 
     private static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check,
-                                         ScopeProofCheck scopeCheck) throws Exception {
-        boolean withRestore = scopeCheck != null;
-        require(List.of("b06", "b08", "b09").contains(ticket), "Unexpected dual-cluster fixture ticket");
+                                         ScopeProofCheck scopeCheck, ScopeResolverCheck resolverCheck) throws Exception {
+        boolean withResolver = resolverCheck != null;
+        boolean withRestore = scopeCheck != null || withResolver;
+        require(List.of("b06", "b08", "b09", "b11").contains(ticket), "Unexpected dual-cluster fixture ticket");
         String label = ticket.toUpperCase(Locale.ROOT);
         require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),
                 "Usage: run|cleanup BIN RUNS_DIRECTORY " + ticket + "-RUN_ID");
@@ -208,8 +215,15 @@ public final class QualifyPostgresql {
         Files.writeString(owner, args[3], StandardOpenOption.CREATE_NEW);
         System.out.printf("%s run=%s Java=%s UTC start=%s%n", label, run, Runtime.version(), Instant.now());
         try {
-            probe.runDualCheck(withRestore ? (workflow, proof) ->
-                    scopeCheck.run(workflow, proof, probe::restoreWorkflowSnapshot) : check, withRestore);
+            WorkflowAndProofCheck operation = check;
+            if (withResolver) {
+                operation = (workflow, proof) -> resolverCheck.run(workflow, proof, probe::restoreWorkflowSnapshot,
+                        () -> connect(probe.workflow, probe.workflowResolver),
+                        () -> connect(probe.proof, probe.proofResolver));
+            } else if (withRestore) {
+                operation = (workflow, proof) -> scopeCheck.run(workflow, proof, probe::restoreWorkflowSnapshot);
+            }
+            probe.runDualCheck(operation, withRestore, withResolver);
         } catch (Exception | Error failure) {
             try {
                 probe.dualCleanup(withRestore);
@@ -222,9 +236,10 @@ public final class QualifyPostgresql {
         System.out.println("PASS " + label + " workflow/proof verification and teardown " + Instant.now());
     }
 
-    private void runDualCheck(WorkflowAndProofCheck check, boolean withRestore) throws Exception {
-        initialize(workflow, workflowWriter, workflowObserver, withRestore ? workflowBackup : null);
-        initialize(proof, proofWriter, proofObserver, null);
+    private void runDualCheck(WorkflowAndProofCheck check, boolean withRestore, boolean withResolver) throws Exception {
+        initialize(workflow, workflowWriter, workflowObserver, withRestore ? workflowBackup : null,
+                withResolver ? workflowResolver : null);
+        initialize(proof, proofWriter, proofObserver, null, withResolver ? proofResolver : null);
         inspect(workflow, workflowWriter, workflowObserver);
         inspect(proof, proofWriter, proofObserver);
         denyConnection(workflow, proofWriter.name, proofWriter.password, "28000");
@@ -277,6 +292,12 @@ public final class QualifyPostgresql {
     @FunctionalInterface
     interface ScopeProofCheck {
         void run(Connections workflow, Connections proof, ScopeRestore restore) throws Exception;
+    }
+
+    @FunctionalInterface
+    interface ScopeResolverCheck {
+        void run(Connections workflow, Connections proof, ScopeRestore restore,
+                 SqlConnection workflowResolver, SqlConnection proofResolver) throws Exception;
     }
 
     @FunctionalInterface
@@ -387,6 +408,10 @@ public final class QualifyPostgresql {
     }
 
     private void initialize(Cluster cluster, Role writer, Role observer, Role backup) throws Exception {
+        initialize(cluster, writer, observer, backup, null);
+    }
+
+    private void initialize(Cluster cluster, Role writer, Role observer, Role backup, Role resolver) throws Exception {
         Path passwordFile = initPasswordFile(cluster);
         Files.writeString(passwordFile, cluster.admin.password + "\n", StandardOpenOption.CREATE_NEW);
         try {
@@ -417,6 +442,9 @@ public final class QualifyPostgresql {
         if (backup != null) {
             hba += hbaRule("replication", backup.name);
         }
+        if (resolver != null) {
+            hba += hbaRule(cluster.database, resolver.name);
+        }
         Files.writeString(cluster.data.resolve("pg_hba.conf"), hba, StandardOpenOption.TRUNCATE_EXISTING);
         start(cluster);
         NativeResult psql = nativeCommand("psql", 10, cluster.admin.password, "-X", "-w", "-h", HOST, "-p", "" + cluster.port,
@@ -432,6 +460,11 @@ public final class QualifyPostgresql {
             runSql(admin, "CREATE DATABASE " + cluster.database);
             runSql(admin, "REVOKE ALL ON DATABASE " + cluster.database + " FROM PUBLIC");
             runSql(admin, "GRANT CONNECT ON DATABASE " + cluster.database + " TO " + writer.name + ", " + observer.name);
+            if (resolver != null) {
+                createLogin(admin, resolver, "NOREPLICATION");
+                runSql(admin, "GRANT CONNECT ON DATABASE " + cluster.database + " TO " + resolver.name);
+                denyConnection(cluster, resolver.name, resolver.password + "wrong", "28P01");
+            }
         }
         try (Connection admin = connect(cluster, cluster.admin)) {
             runSql(admin, "REVOKE ALL ON SCHEMA public FROM PUBLIC");
