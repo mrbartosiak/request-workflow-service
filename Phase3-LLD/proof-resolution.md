@@ -1,0 +1,17 @@
+# Independent confirmation and fenced resolution
+
+**Scope** DEC-03/04/05/08/13/14, Q-02/03/09/10/13, R-01/08/10. D1-R/D2-R proof protocol. Production proof products, topology and named resolver authority remain open. [Scope journal](authority-continuity.md) · [Publication journal](publication-journal.md)
+
+## Scope preparation
+
+`ScopeAuthorityJournal.prepare(organization,epoch,scopeAttemptId,deltaDigest)` reserves one ordered sequence and persists PENDING with the protected delta. Generate `scopeAttemptId` for the local transaction attempt before its first call. It is unique across epochs and stable across retransmissions for that delta. A repeated exact call resolves the same record and sequence. A conflicting digest or scope/epoch for that ID is rejected. The local transaction commits the witness with attempt ID, sequence and exact digest.
+
+A lost prepare response stops the local attempt before applying the effect. A certified live rollback or equivalent original-lineage terminal evidence authorizes `abort(scopeAttemptId,proof)`. If a PENDING entry already exists, mark that sequence ABORTED. Otherwise durably close the attempt ID before a delayed prepare can allocate a sequence. A late repeat returns the existing final state. Missing restored rows, uncertain rollback or unavailable original evidence leave the attempt or sequence gap unresolved. Never skip a gap or start another effect on a disputed attempt. [Witnesses](witness-records.md)
+
+## Resolver and gates
+
+`ProofResolver` is an internal, audited component with independently authorized scope/attempt access. It selects an immutable attempt from the protected journal or an authorized recovery work item. It can read named witnesses from the certified committing lineage or authenticated retained commit/abort evidence while the public scope is closed. It returns no protected data to public callers. It confirms or aborts idempotently and can rebuild verified proof projections under the exclusive organization guard. It never executes a new lifecycle action, receipt, obligation or send. Unknown proof leaves scope or target fenced. The active public path returns an ordinary authority deferral while scope proof is unready, regardless of receipt presence. [Authority gate](access.md) · [Recovery](recovery.md)
+
+A committed command may require both scope and publication confirmation. Either may finish first. No combined effect is public or eligible for newly armed dispatch until applicable scope changes are confirmed, current scope is independently verified, and any required publication association is confirmed and reflected in the guarded projection. A known local commit with current scope but unresolved publication proof yields 503 `outcome_unknown` for the command. Authorized same-key resolution can complete proof, never by reapplying the effect. The journal can drive resolution independently when the public path is closed. [Retries](retries.md) · [Outbound](integration.md)
+
+Before success handoff, recheck submitted and original grants as applicable, scope/epoch and current freshness under the shared guard. Record a minimized release preparation witness separately from the commit confirmations. Then hand off bounded bytes under that guard. Record handoff and client confirmation only when evidenced. Proof updates and release evidence are distinct from business effects. [Evidence states](witness-records.md) · [Cut tests](proof-evidence.md)

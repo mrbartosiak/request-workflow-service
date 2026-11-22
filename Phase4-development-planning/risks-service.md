@@ -1,0 +1,18 @@
+# Service risks and recovery playbook
+
+Detect and exercise these on synthetic approved fixtures before related production decisions. Preserve sanitized raw outcomes, fact counts and safe correlation. [Production incident lessons](../Phase1-conceptual/production-risks.md) · [Accepted trace](../Phase3-LLD/traceability.md)
+
+| Risk and earliest signal | Mitigation and contingency | Role and gate |
+| --- | --- | --- |
+| R-01 · Uncertain DB outcome/timeouts at B34 first cuts | Bound/mark 503 unknown, hold same key, resolve on certified lineage. Block fresh effects while missing proof. Report commits, handoffs and positively acknowledged losses independently. | Storage lead, reviewed B34/B40 → G2/G7. |
+| R-02 · Invalid pair, duplicate IDs or lock pileup at B35 | Assert ordering under key/org/request/namespace locks, burn IDs, fence exhausted counters. Stop affected writes on unprovable state and inspect integrity and primary. Measure contention. | Storage lead, B35/B38 → G2. |
+| R-03 · Pool/queue latency, amplification or slow proof at B25/B42 | Separate bounded workers and pools, limit deadline/backoff, throttle by destination and admit gradually. Quarantine unknown, report offered/completed and capacity breach. Hold formal threshold claims with incomplete data. | Operations/performance, B42/B49/B50 → G7/G8/G9. |
+| R-04 · Throttles, ambiguous remote count, stale lookup or duplicate at B24/B27 | Preserve stable IDs and durable send/ACK state, verify authoritative proof before repeat, quarantine uncertain effects. Restrict destination and reconcile remote count. Apply approved compensation only. | Vendor owner, B24/B27/B54 → G5. |
+| R-05 · Vendor field, credential or contract drift at B28 lab examples | Verify tenant/version and scopes, test credential rotation and stale/missing notifications. Isolate affected operation, retain and reconcile obligations, require new approval if semantics change. | Vendor/security, B28/B54 → G5. |
+| R-06 · Invalid text/mandatory reason or DB attempt at B03 | Zero mutation attempt on invalid inputs, round-trip approved Unicode. If selected engine differs, fix validation or seek approved wire change before startup. | API/storage, B03/B05/B45 → G2/Phase 6. |
+| R-07 · Log gaps/overflow or secret sentinel at B41/B42 | Safe field catalog, encrypted spool, reserved reject evidence, alert/restrict/drain or stop routing. Reconcile actual traffic and inspect protected access. Report any evidence gap. | Operations/security, B41/B42/B55 → G7. |
+| R-08 · Stale authority, wrong target or exposed field at B06/B36 | Enforce stable identity and independent authority, current grant/field proof at effect and release. Close protected paths, roll back unsafe action and audit scope. Rebuild exact scope proof before reopening. | IAM/data lead, B36/B39/B52 → G3. |
+| R-09 · Failed migration, retained receipt/outbox drift at B05/B44 | Run old-record upgrade/compatible rollback. Preserve unchanged external associations. Freeze rollout if integrity or proof checks fail and restore verified state safely. | Storage/operations, B44/B51/B55 → G2/G7/G11. |
+| R-10 · Backup gap, stale writer/egress, lost receipt or external divergence at B29 | Physically fence, rely on independent scope and publication/inbound proof, retain original association or close affected scope. Require verified staged resumption, count only evidenced lost acknowledgments, compare RPO and ≤60 min target. | Continuity lead, B29–B31/B37–B40/B44/B55 → G2/G4/G7. |
+
+[Operations reference](../Phase3-LLD/operations.md) · [Recovery sequence](../Phase3-LLD/recovery.md)

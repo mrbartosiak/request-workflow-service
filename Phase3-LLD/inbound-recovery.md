@@ -1,0 +1,14 @@
+# Inbound deduplication across restore
+
+**Scope** F-11, Q-09/10/13, R-04/10, DEC-08/09/10/14. D4-R recovery gate for source, tenant and identity domain. Live sources, exact retention and provider acknowledgement behavior remain deferred. [Inbound contract](integration.md) · [Recovery sequence](recovery.md)
+
+`InboxAdmission` proves current writer and authorized sender before exposing receipt evidence. Evaluate completeness per `(sourceSystem,tenant,identityDomain)`. During rewind or continuity loss, obtain trusted retained history or equivalent independent proof of each possible committed receipt, its semantic binding and its effect or processing obligation. Include receptions whose acknowledgement was lost. A restored missing row or a source notification alone cannot attest absence. Hold incomplete source scope admission closed while independently certified unrelated scopes continue. Reconcile already possible remote effects separately. [Scope authority](authority-continuity.md)
+
+| Evidence found | Admission and durable disposition |
+| --- | --- |
+| Trusted compatible prior receipt plus corresponding effect/obligation | Recover the original receipt and applicable complete effect or processing state from trusted records under the shared command/inbox boundary. Preserve their identities and delivery/dedup state. After verified recovery, acknowledge exact repeat with zero second business effects. |
+| Trusted prior binding with different type, target, revision or semantics | Keep original binding and effect. Durably quarantine the authenticated discrepancy and emit a safe non-success response with no extra business effects. |
+| Complete coverage and proven absence | Admit a fresh receipt and effect/processing obligation atomically. Acknowledge only after commit. |
+| Missing coverage or prior effect unproved | Defer or durably quarantine evidence without positive acceptance. Never create a second receipt-derived effect. A later attempt needs exact recovery or verified fresh absence. |
+
+**Two-instance restore case.** Accept and acknowledge a fixture event, then restore a backup that omits its receipt. Retry it through the other process while proof is withheld. Expect no success acknowledgement and zero added business effects or dispatch. With trusted proof, restore the original receipt/obligation and acknowledge exact repeats without another obligation/send. Reuse the same trusted event identity with a changed body or supported declared type. Verify quarantine, original unchanged and safe non-success. A certified independent source can admit a new event while the first is fenced. Compare acknowledgements and authoritative receipt, effect, obligation, quarantine and remote counts. Check a lost acknowledgement variant too. [Conformance](verification.md) · [Restore evidence](restore-evidence.md)

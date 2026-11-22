@@ -1,0 +1,5 @@
+# Quick performance check readiness
+
+**2026-11-22 (Europe/Warsaw) · No application measurement.** The owner authorized a brief performance check. The repository inventory contains design material and source briefs. A service entry point, Java/Kotlin application sources, build descriptors/wrappers, runnable packages and service deployment configuration were absent. The command-line Java is 21 and PostgreSQL client and server tools and Docker were unavailable in the checked paths. No runnable target or endpoint was supplied. [Owner direction](../../owner-kickoff.md) · [Required targets](../../../Phase2-HLD/acceptance-evidence.md#performance)
+
+**Next measurement.** Use a runnable Java 25/Spring 7.0.11 build on two service instances sharing one prepared database. Run one short paced smoke against authorized seeded requests, record the offer and completion rate, each core operation's count, within-500-ms share, maximum and failures, and identify the data and runtime. Label the result as evidence for the measured profile. The fuller acceptance thresholds apply independently. [Approved performance method](../../../Phase2-HLD/performance-test-plan.md)

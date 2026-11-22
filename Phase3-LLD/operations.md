@@ -1,0 +1,19 @@
+# Logging, release gates and resilience
+
+**Scope** A-07, Q-05/06/07/10, R-01/03/05/07/09/10, DEC-07/09/14. D6-R adopts buffered logging, advisory and quality directions, and a backup/log rehearsal first. Exact production policies and owners remain open. [Operating policy](../Phase2-HLD/operating-policy-alternatives.md)
+
+**Request/error records.** At ingress and egress log every request and its outcome, including pre-auth rejects and transport errors. Record every vendor send and timeout. Use UTC instant, direction, safe correlation, operation/route template, destination alias, outcome, elapsed time and safe failure stage/error class with catalogued descriptions. Exclude bodies, reasons, names, IDs where not operationally needed, raw URLs/query values, arbitrary exception text, raw keys/tokens, credentials and third-party payloads. An authenticated interface may correlate an incident using restricted lookup. Log accesses and recovery operations separately from workflow history. Use approved encrypted buffering and restrict log access by duty.
+
+D6-R starts with an encrypted persistent 128 MiB per-instance spool plus independently budgeted edge reject logging. Reserve capacity for request start/end and error before accepting service or authorizing outbound work. Alert at 60% and restrict admission at 80%, with reserved reject and drain headroom. If reject evidence cannot be preserved, stop routing and record the Q-05 evidence gap. Approve protected log access and retention. Verify sink outage, drain/reorder, secret exclusion and admit/reject counts against observed traffic. Buffered fail-closed admission protects evidence at the cost of spool sizing and operations. [Priority and review](decisions.md)
+
+**Advisories.** D6-R checks resolved direct/transitive versions weekly and before release against Spring Security Advisories and Snyk. Record dates, versions, findings including none, applicability, exposure and owner. Block a missing review or an applicable unresolved critical/high exposed finding. Log supporting evidence. Exact thresholds for assessing exposure, extra risk rules, response deadlines, named exceptions and tooling adoption need independent approval. [D6 reference](work/reviews/comparison-operations.md) · [Spring advisories](https://spring.io/security/) · [Snyk database](https://security.snyk.io/)
+
+| D6-R example | Release-gate result for this rule |
+| --- | --- |
+| Scheduled or release review missing | Block. |
+| Applicable unresolved high and exposed | Block. |
+| Documented unexposed critical item and complete review | Record and track. This advisory rule allows release subject to other approved gates. |
+
+**Quality.** D6-R starts with complexity ≤10 per agreed critical method and ≥90% critical branch coverage, plus concurrency, release and migration cases. Approve exact paths, evidence ownership and tool choice separately. Java 25-compatible JaCoCo is a tool option with version/support proof required. Report exceptions, impact, owners and missed outcomes. [JaCoCo counters](https://www.jacoco.org/jacoco/trunk/doc/counters.html) · [Evidence](verification.md)
+
+**Pressure and recovery.** Record queue depth/age, pool and lock waits, admission/errors, per-destination lag/unknown count, slow or stale authority, log rejection gaps and generation proof state. Bound client and worker retry amplification. Gradually resume after faults and test migration/compatible rollback with existing records, retained receipts, policy, mappings and pending work. Proposed alerts for unknown delivery >0, lost authority proof or p95 lock wait >100 ms over 5 min remain open for operating review. Exercise verified recovery with audited pause/recovery/reconciliation/resume. The target is verified service within 60 min from declaration. Report lost acknowledged writes separately. [Recovery](recovery.md) · [Performance](performance.md)
