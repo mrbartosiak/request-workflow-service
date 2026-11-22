@@ -34,7 +34,10 @@ public final class JdbcAuthorityProvisioning {
         migrateThrough(3);
     }
 
-    /** Enables the private, audited resolver on top of the independent scope journal. */
+    /**
+     * Enables the private, audited resolver. Run as the owner against a trusted B09 journal
+     * whose already closed aborts were established by certified original-lineage rollback.
+     */
     public void migrateScopeResolver() {
         migrateThrough(MIGRATIONS.size());
     }
@@ -121,11 +124,8 @@ public final class JdbcAuthorityProvisioning {
                 try (var record = connection.prepareStatement(
                         "INSERT INTO request_authority.schema_migration VALUES (?)")) {
                     for (int index = applied.size(); index < sources.size(); index++) {
-                        for (String command : sources.get(index).split(";")) {
-                            if (!command.isBlank()) {
-                                statement.execute(command);
-                            }
-                        }
+                        // pgJDBC parses the SQL script, including dollar-quoted routine bodies.
+                        statement.execute(sources.get(index));
                         record.setInt(1, index + 1);
                         record.executeUpdate();
                     }

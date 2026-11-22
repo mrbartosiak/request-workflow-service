@@ -28,16 +28,24 @@ final class ScopeJournalCheckpoint {
                 Long.toString(version), admission.genesis().policyDigest(), admission.writer().writerId().toString(),
                 Long.toString(admission.writer().generation()), Long.toString(prefix.head()));
         try (var query = proof.prepareStatement("""
-                SELECT a.*, a.workflow_transaction::text AS workflow_transaction_text, c.evidence_digest
+                SELECT a.*, a.workflow_transaction::text AS workflow_transaction_text, c.evidence_digest,
+                       t.attempt_id IS NOT NULL AS terminal_proved
                 FROM request_authority.scope_journal_attempt a
                 LEFT JOIN request_authority.scope_journal_confirmation c USING (attempt_id)
-                WHERE a.organization = ? AND a.sequence IS NOT NULL ORDER BY a.sequence
+                LEFT JOIN request_authority.scope_journal_terminal_check t USING (attempt_id)
+                WHERE a.organization = ? ORDER BY a.sequence NULLS LAST
                 """)) {
             query.setString(1, JdbcScopeAuthorityJournal.organization(admission));
             try (var rows = query.executeQuery()) {
                 long position = 0;
                 while (rows.next()) {
                     var entry = JdbcScopeAuthorityJournal.readEntry(rows, admission);
+                    if (!rows.getBoolean("terminal_proved")) {
+                        throw new AuthorityUnavailableException();
+                    }
+                    if (entry.sequence().isEmpty()) {
+                        continue;
+                    }
                     if (entry.sequence().orElseThrow() != ++position || entry.attempt().beforeVersion() != version) {
                         throw new AuthorityUnavailableException();
                     }

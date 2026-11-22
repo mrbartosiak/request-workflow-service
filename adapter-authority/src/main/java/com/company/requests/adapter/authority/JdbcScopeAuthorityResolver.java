@@ -65,17 +65,13 @@ public final class JdbcScopeAuthorityResolver implements ScopeAuthorityResolutio
                 requireStoredDelta(connection, entry);
             }
             var resolved = switch (work.operation()) {
-                case CONFIRM -> confirm(connection, entry);
-                case ABORT -> abort(connection, entry);
+                case CONFIRM -> confirm(connection, work, entry);
+                case ABORT -> abort(connection, work, entry);
             };
             var checkpoint = ScopeJournalCheckpoint.read(connection, admission);
             checkpoint.requireGuard(guard);
-            try (var update = connection.prepareStatement("""
-                    UPDATE request_authority.scope_resolver_audit SET terminal_state = ? WHERE audit_id = ?
-                    """)) {
-                update.setString(1, resolved.state().name());
-                update.setObject(2, work.auditId());
-                JdbcScopeAuthorityJournal.requireOne(update.executeUpdate());
+            if (entry.state() == resolved.state()) {
+                recordRepeat(connection, work, resolved);
             }
             return new Terminal(resolved.state(), checkpoint);
         });
@@ -100,7 +96,7 @@ public final class JdbcScopeAuthorityResolver implements ScopeAuthorityResolutio
         });
     }
 
-    private Entry confirm(Connection connection, Entry entry) throws SQLException {
+    private Entry confirm(Connection connection, Work work, Entry entry) throws SQLException {
         if (entry.state() != State.PENDING && entry.state() != State.COMMITTED) {
             throw new AuthorityUnavailableException();
         }
@@ -108,7 +104,7 @@ public final class JdbcScopeAuthorityResolver implements ScopeAuthorityResolutio
         if (entry.state() == State.COMMITTED) {
             return entry;
         }
-        var committed = JdbcScopeAuthorityJournal.transition(connection, entry, State.COMMITTED);
+        var committed = applyTerminal(connection, work, entry, State.COMMITTED);
         try (var insert = connection.prepareStatement("""
                 INSERT INTO request_authority.scope_journal_confirmation (attempt_id, evidence_digest) VALUES (?, ?)
                 """)) {
@@ -119,14 +115,37 @@ public final class JdbcScopeAuthorityResolver implements ScopeAuthorityResolutio
         return committed;
     }
 
-    private Entry abort(Connection connection, Entry entry) throws SQLException {
+    private Entry abort(Connection connection, Work work, Entry entry) throws SQLException {
         if (entry.state() == State.ABORTED) {
             return entry;
         }
         if (entry.state() == State.COMMITTED || !"aborted".equals(original.status(connection, entry.attempt()))) {
             throw new AuthorityUnavailableException();
         }
-        return JdbcScopeAuthorityJournal.transition(connection, entry, State.ABORTED);
+        return applyTerminal(connection, work, entry, State.ABORTED);
+    }
+
+    private static Entry applyTerminal(Connection connection, Work work, Entry entry, State terminal) throws SQLException {
+        try (var apply = connection.prepareStatement("SELECT request_authority.apply_scope_terminal(?, ?)")) {
+            apply.setObject(1, work.auditId());
+            apply.setString(2, entry.state().name());
+            try (var rows = apply.executeQuery()) {
+                if (!rows.next() || !rows.getBoolean(1)) {
+                    throw new AuthorityUnavailableException();
+                }
+            }
+        }
+        return new Entry(entry.attempt(), entry.sequence(), terminal);
+    }
+
+    private static void recordRepeat(Connection connection, Work work, Entry entry) throws SQLException {
+        try (var update = connection.prepareStatement("""
+                UPDATE request_authority.scope_resolver_audit SET terminal_state = ? WHERE audit_id = ?
+                """)) {
+            update.setString(1, entry.state().name());
+            update.setObject(2, work.auditId());
+            JdbcScopeAuthorityJournal.requireOne(update.executeUpdate());
+        }
     }
 
     private static void requireStoredDelta(Connection connection, Entry entry) throws SQLException {

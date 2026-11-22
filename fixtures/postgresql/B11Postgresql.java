@@ -55,6 +55,7 @@ import org.springframework.jdbc.datasource.AbstractDataSource;
 public final class B11Postgresql {
     private static final OrganizationId SCOPE = new OrganizationId("b11-scope");
     private static final OrganizationId OTHER = new OrganizationId("b11-other");
+    private static final OrganizationId LEGACY = new OrganizationId("b11-legacy");
     private static final WriterEpoch WRITER = new WriterEpoch(UUID.randomUUID(), 9);
     private static final RequestType TYPE = RequestType.HR_TICKET;
     private static final AuthenticatedActor ACTOR = new AuthenticatedActor("b11-issuer", SCOPE, "b11-actor",
@@ -64,6 +65,8 @@ public final class B11Postgresql {
     private static final Admission ADMISSION = new Admission(POLICY.genesis(), WRITER);
     private static final Admission OTHER_ADMISSION = new Admission(
             new SyntheticScopePolicy(OTHER, 1, List.of()).genesis(), WRITER);
+    private static final Admission LEGACY_ADMISSION = new Admission(
+            new SyntheticScopePolicy(LEGACY, 1, List.of()).genesis(), WRITER);
     private static final Delta DELTA = new Delta("scoped-authority-ą-東京".getBytes(StandardCharsets.UTF_8));
     private static final String ATTEMPTS = "request_authority.scope_journal_attempt";
     private static final String AUDIT = "request_authority.scope_resolver_audit";
@@ -71,6 +74,8 @@ public final class B11Postgresql {
     private static final String DELTAS = "request_authority.scope_journal_delta";
     private static final String PROJECTION = "requests.scope_authority_projection";
     private static final String CONFIRMATION = "request_authority.scope_journal_confirmation";
+    private static final String TERMINAL = "request_authority.scope_journal_terminal";
+    private static final String APPLY = "request_authority.apply_scope_terminal";
     private static final String WITNESS = "requests.scope_authority_witness";
 
     private final OperatorCredential operator = credential();
@@ -79,6 +84,7 @@ public final class B11Postgresql {
     private final JdbcTemplate proofOwner;
     private final JdbcTemplate commandJdbc;
     private final DataSource observer;
+    private final DataSource preparationLogin;
     private final DataSource resolverLogin;
     private final JdbcScopeAuthorityJournal journal;
     private final JdbcTransactionRunner commandTx;
@@ -90,11 +96,13 @@ public final class B11Postgresql {
     private final JdbcScopeProjectionStore projection;
     private final ScopeProofResolver resolver;
     private final CurrentAccess publicAccess;
+    private final Upgrade upgrade;
 
     private B11Postgresql(QualifyPostgresql.Connections workflow, QualifyPostgresql.Connections proof,
                          QualifyPostgresql.SqlConnection projectionLogin, QualifyPostgresql.SqlConnection resolveLogin) {
         var command = source(workflow.runtime());
         var prepare = source(proof.runtime());
+        preparationLogin = prepare;
         var projector = source(projectionLogin);
         observer = source(workflow.observer());
         resolverLogin = source(resolveLogin);
@@ -113,8 +121,9 @@ public final class B11Postgresql {
         projection = new JdbcScopeProjectionStore(projector);
         resolver = resolver(observer, projection);
         publicAccess = new CurrentAccess(journal, WRITER, List.of(POLICY));
-        provision(workflowAdmin, proofAdmin, command);
+        upgrade = provision(workflowAdmin, proofAdmin, command, prepare);
         checkPrivileges(prepare, projector, source(proof.observer()));
+        checkUpgrade(prepare);
     }
 
     public static void main(String[] args) {
@@ -134,7 +143,7 @@ public final class B11Postgresql {
         }
     }
 
-    private void provision(DataSource workflowAdmin, DataSource proofAdmin, DataSource command) {
+    private Upgrade provision(DataSource workflowAdmin, DataSource proofAdmin, DataSource command, DataSource prepare) {
         var workflowMigrations = new JdbcWorkflowMigrations(workflowAdmin);
         workflowMigrations.migrateScopeWitnesses();
         workflowMigrations.migrateScopeProjection();
@@ -149,6 +158,7 @@ public final class B11Postgresql {
         commandTx.run(() -> {
             commandGuards.insert(new PolicyGuard(SCOPE, 1));
             commandGuards.insert(new PolicyGuard(OTHER, 1));
+            commandGuards.insert(new PolicyGuard(LEGACY, 1));
             return null;
         });
         var provisioning = new JdbcAuthorityProvisioning(proofAdmin);
@@ -157,38 +167,75 @@ public final class B11Postgresql {
         provisioning.certifyWorkflow(WRITER, JdbcWorkflowIdentity.inspect(command));
         provisioning.certifyGenesis(ADMISSION.genesis());
         provisioning.certifyGenesis(OTHER_ADMISSION.genesis());
+        provisioning.certifyGenesis(LEGACY_ADMISSION.genesis());
         provisioning.migrateScopeJournal();
-        provisioning.migrateScopeResolver();
-        provisioning.migrateScopeResolver();
-        var operatorId = UUID.randomUUID();
-        provisioning.authorizeScopeOperator(operatorId, operator, SCOPE, Operation.CONFIRM);
-        provisioning.authorizeScopeOperator(operatorId, operator, SCOPE, Operation.CONFIRM);
-        provisioning.authorizeScopeOperator(operatorId, operator, SCOPE, Operation.ABORT);
-        provisioning.authorizeScopeOperator(UUID.randomUUID(), confirmOnly, SCOPE, Operation.CONFIRM);
         proofOwner.execute("GRANT USAGE ON SCHEMA request_authority TO b04_proof, b04_observer, b11_resolver");
         proofOwner.execute("""
                 GRANT SELECT ON request_authority.scope_genesis, request_authority.writer_epoch,
                     request_authority.workflow_certificate, request_authority.scope_journal_head,
-                    request_authority.scope_journal_attempt, request_authority.scope_journal_confirmation
-                    TO b04_proof, b11_resolver
+                    request_authority.scope_journal_attempt TO b04_proof, b11_resolver
                 """);
         proofOwner.execute("GRANT INSERT ON " + ATTEMPTS + ", " + DELTAS + " TO b04_proof");
         proofOwner.execute("GRANT UPDATE (sequence, state) ON " + ATTEMPTS + " TO b04_proof");
         proofOwner.execute("GRANT UPDATE (last_sequence) ON " + HEAD + " TO b04_proof");
-        proofOwner.execute("GRANT UPDATE (state) ON " + ATTEMPTS + " TO b11_resolver");
+        var legacy = seedB09Upgrade(prepare);
+        provisioning.migrateScopeResolver();
+        provisioning.migrateScopeResolver();
+        proofOwner.execute("REVOKE UPDATE (state) ON " + ATTEMPTS + " FROM b04_proof");
+        proofOwner.execute("REVOKE INSERT ON " + ATTEMPTS + " FROM b04_proof");
+        grantRegistrationColumns();
+        var operatorId = UUID.randomUUID();
+        provisioning.authorizeScopeOperator(operatorId, operator, SCOPE, Operation.CONFIRM);
+        provisioning.authorizeScopeOperator(operatorId, operator, SCOPE, Operation.CONFIRM);
+        provisioning.authorizeScopeOperator(operatorId, operator, SCOPE, Operation.ABORT);
+        provisioning.authorizeScopeOperator(operatorId, operator, LEGACY, Operation.ABORT);
+        provisioning.authorizeScopeOperator(UUID.randomUUID(), confirmOnly, SCOPE, Operation.CONFIRM);
+        proofOwner.execute("""
+                GRANT SELECT ON request_authority.scope_journal_confirmation, request_authority.scope_journal_terminal_check
+                    TO b04_proof, b11_resolver
+                """);
+        proofOwner.execute("GRANT EXECUTE ON FUNCTION " + APPLY + "(uuid, text) TO b11_resolver");
         proofOwner.execute("GRANT INSERT ON " + CONFIRMATION + " TO b11_resolver");
         proofOwner.execute("GRANT SELECT, INSERT, UPDATE (terminal_state, outcome) ON " + AUDIT + " TO b11_resolver");
         proofOwner.execute("""
                 GRANT SELECT ON request_authority.scope_resolver_operator, request_authority.scope_resolver_grant,
                     request_authority.scope_resolver_delta_check TO b11_resolver
                 """);
+        return legacy;
+    }
+
+    private void grantRegistrationColumns() {
+        proofOwner.execute("""
+                GRANT INSERT (attempt_id, organization, generation, workflow_transaction,
+                    before_version, after_version, delta_digest)
+                ON request_authority.scope_journal_attempt TO b04_proof
+                """);
     }
 
     private void checkPrivileges(DataSource prepare, DataSource projector, DataSource proofObserver) {
+        var preparing = new JdbcTemplate(prepare);
+        var terminal = new JdbcTemplate(resolverLogin);
+        String stateUpdate = "SELECT has_column_privilege('" + ATTEMPTS + "', 'state', 'UPDATE')";
+        String sequenceUpdate = "SELECT has_column_privilege('" + ATTEMPTS + "', 'sequence', 'UPDATE')";
+        String stateInsert = "SELECT has_column_privilege('" + ATTEMPTS + "', 'state', 'INSERT')";
+        String identityInsert = "SELECT has_column_privilege('" + ATTEMPTS + "', 'attempt_id', 'INSERT')";
+        String apply = "SELECT has_function_privilege('" + APPLY + "(uuid,text)', 'EXECUTE')";
+        require(Boolean.FALSE.equals(preparing.queryForObject(stateUpdate, Boolean.class))
+                && Boolean.TRUE.equals(preparing.queryForObject(sequenceUpdate, Boolean.class)),
+                "preparer can update sequence only");
+        require(Boolean.FALSE.equals(preparing.queryForObject(stateInsert, Boolean.class))
+                && Boolean.TRUE.equals(preparing.queryForObject(identityInsert, Boolean.class)),
+                "preparer can insert registration coordinates only");
+        require(Boolean.FALSE.equals(terminal.queryForObject(stateUpdate, Boolean.class))
+                && Boolean.FALSE.equals(preparing.queryForObject(apply, Boolean.class))
+                && Boolean.TRUE.equals(terminal.queryForObject(apply, Boolean.class)),
+                "only resolver role can invoke audited terminal routine");
         for (var reader : List.of(prepare, proofObserver, resolverLogin)) {
             expectSql("42501", () -> new JdbcTemplate(reader).execute("SELECT exact_delta FROM " + DELTAS));
         }
         expectSql("42501", () -> new JdbcTemplate(prepare).execute("SELECT * FROM " + AUDIT));
+        expectSql("42501", () -> preparing.execute("SELECT * FROM " + TERMINAL));
+        expectSql("42501", () -> terminal.execute("DELETE FROM " + TERMINAL + " WHERE false"));
         expectSql("42501", () -> new JdbcTemplate(prepare).execute("DELETE FROM " + CONFIRMATION));
         expectSql("42501", () -> commandJdbc.execute("DELETE FROM " + PROJECTION));
         expectSql("42501", () -> new JdbcTemplate(projector).execute("DELETE FROM requests.operation_receipt"));
@@ -199,6 +246,93 @@ public final class B11Postgresql {
                 .equals(List.of(1, 2, 3, 4)), "proof migration history");
         System.out.println("PASS additive migration/reapply and independent preparation, resolution, projection and observer roles");
     }
+
+    private Upgrade seedB09Upgrade(DataSource prepare) {
+        var legacy = new JdbcScopeAuthorityJournal(prepare, observer);
+        var legacyMutation = new ScopeAuthorityMutation(commandTx, commandGuards, legacy, witnesses);
+        expect(Rollback.class, () -> legacyMutation.run(LEGACY_ADMISSION, DELTA, guard -> { throw new Rollback(); }));
+        var numbered = legacy.findUnresolved(LEGACY_ADMISSION).orElseThrow();
+        var closed = legacy.abort(LEGACY_ADMISSION, numbered.attempt().id());
+        require(closed.state() == State.ABORTED && closed.sequence().orElseThrow() == 1, "qualified B09 numbered abort");
+        var unnumbered = registerAndRollback(legacy, LEGACY_ADMISSION);
+        require(legacy.abort(LEGACY_ADMISSION, unnumbered.attempt().id()).state() == State.ABORTED,
+                "qualified B09 unnumbered abort");
+        return new Upgrade(numbered, unnumbered, registerAndRollback(legacy, OTHER_ADMISSION));
+    }
+
+    private void checkUpgrade(DataSource prepare) {
+        var terminal = new JdbcTemplate(resolverLogin);
+        var preparing = new JdbcTemplate(prepare);
+        var foreign = upgrade.unresolved();
+        String change = "UPDATE " + ATTEMPTS + " SET state = 'ABORTED' WHERE attempt_id = ?";
+        UUID foreignId = foreign.attempt().id();
+        expectSql("42501", () -> preparing.update(change, foreignId));
+        expectSql("42501", () -> terminal.update(change, foreignId));
+        expectSql("42501", () -> preparing.queryForObject("SELECT " + APPLY + "(?, 'REGISTERED')",
+                Boolean.class, UUID.randomUUID()));
+        require(!Boolean.TRUE.equals(terminal.queryForObject("SELECT " + APPLY + "(?, 'REGISTERED')",
+                Boolean.class, UUID.randomUUID())), "resolver routine requires an authorized audit");
+        var insert = """
+                INSERT INTO request_authority.scope_journal_attempt
+                    (attempt_id, organization, generation, workflow_transaction, before_version,
+                     after_version, delta_digest, sequence, state)
+                SELECT ?, organization, generation, workflow_transaction, before_version,
+                       after_version, delta_digest, CAST(? AS bigint), ?
+                FROM request_authority.scope_journal_attempt WHERE attempt_id = ?
+                """;
+        expectSql("42501", () -> preparing.update(insert, UUID.randomUUID(), null, "ABORTED", foreignId));
+        expectSql("42501", () -> preparing.update(insert, UUID.randomUUID(), 1L, "PENDING", foreignId));
+        expectSql("42501", () -> preparing.update(insert, UUID.randomUUID(), 1L, "COMMITTED", foreignId));
+        expectSql("42501", () -> preparing.update(insert, UUID.randomUUID(), 1L, "REGISTERED", foreignId));
+        expectSql("42501", () -> preparing.update("UPDATE " + ATTEMPTS + " SET sequence = 2 WHERE attempt_id = ?",
+                upgrade.numbered().attempt().id()));
+
+        // An upgrade can carry the historical grants until its role is reprovisioned.
+        proofOwner.execute("GRANT UPDATE (state) ON " + ATTEMPTS + " TO b04_proof");
+        proofOwner.execute("GRANT INSERT ON " + ATTEMPTS + " TO b04_proof");
+        try {
+            expectSql("42501", () -> preparing.update(change, foreignId));
+            expectSql("42501", () -> preparing.update(insert, UUID.randomUUID(), null, "ABORTED", foreignId));
+            expectSql("42501", () -> preparing.update(insert, UUID.randomUUID(), 1L, "PENDING", foreignId));
+            expectSql("42501", () -> preparing.update(insert, UUID.randomUUID(), 1L, "COMMITTED", foreignId));
+            expectSql("42501", () -> preparing.update(insert, UUID.randomUUID(), 1L, "REGISTERED", foreignId));
+            var stale = new JdbcScopeAuthorityJournal(prepare, observer);
+            expect(AuthorityUnavailableException.class, () -> stale.abort(OTHER_ADMISSION, foreignId));
+        } finally {
+            proofOwner.execute("REVOKE UPDATE (state) ON " + ATTEMPTS + " FROM b04_proof");
+            proofOwner.execute("REVOKE INSERT ON " + ATTEMPTS + " FROM b04_proof");
+            grantRegistrationColumns();
+        }
+        require(state(foreign) == State.REGISTERED && !legacyTerminal(foreign) && !auditedTerminal(foreign),
+                "unresolved B09 registration never receives legacy provenance");
+        require(legacyTerminal(upgrade.numbered()) && legacyTerminal(upgrade.unnumbered()),
+                "migration sealed both verified B09 aborts as legacy");
+        var late = journal.prepare(upgrade.unnumbered().attempt(), DELTA);
+        require(late.state() == State.ABORTED && late.sequence().isEmpty(),
+                "old unnumbered closure still defeats late prepare after upgrade");
+        expect(AuthorityUnavailableException.class, () -> journal.confirmedAuthority().current(LEGACY_ADMISSION));
+        require(resolver.resolve(operator, LEGACY_ADMISSION, upgrade.numbered().attempt().id(), Operation.ABORT)
+                == State.ABORTED, "audit a retry of legacy state without rewriting its provenance");
+        var checkpoint = journal.confirmedAuthority().current(LEGACY_ADMISSION);
+        require(checkpoint.sequence() == 1 && checkpoint.policyVersion() == 1,
+                "rebuild valid pre-V004 prefix above genesis");
+        System.out.println("PASS sequence-only preparation, malformed and terminal SQL blocked, stale V003 abort fenced");
+        System.out.println("PASS numbered and unnumbered B09 rollback provenance survives V004; unresolved registration stays fenced");
+    }
+
+    private boolean legacyTerminal(Entry entry) {
+        return proofOwner.queryForObject("SELECT count(*) FROM " + TERMINAL + " WHERE attempt_id = ? AND audit_id IS NULL",
+                Long.class, entry.attempt().id()) == 1;
+    }
+
+    private boolean auditedTerminal(Entry entry) {
+        return proofOwner.queryForObject("""
+                SELECT count(*) FROM request_authority.scope_journal_terminal t
+                JOIN request_authority.scope_resolver_audit a USING (audit_id)
+                WHERE t.attempt_id = ? AND a.attempt_id = t.attempt_id AND a.authorized
+                """, Long.class, entry.attempt().id()) == 1;
+    }
+
     private void exercise(QualifyPostgresql.ScopeRestore restore) throws Exception {
         require(publicAccess.requireCreate(ACTOR, TYPE).equals(ADMISSION), "normal genesis admission");
         var effects = businessCounts();
@@ -212,7 +346,7 @@ public final class B11Postgresql {
         publicDeferred();
         rejectOperator(entry);
         rejectEvidence(entry, restored);
-        require(count(proofOwner, CONFIRMATION) == 0 && count(workflowOwner, PROJECTION) == 0,
+        require(count(proofOwner, CONFIRMATION) == 0 && countScopeProjection() == 0,
                 "failed operations produce no confirmation or projection");
         installAfterLostProjection(entry);
         require(businessCounts().equals(effects), "confirmation leaves business effects unchanged");
@@ -223,7 +357,7 @@ public final class B11Postgresql {
         require(resolve(next, Operation.CONFIRM) == State.COMMITTED, "second effective change uses rebuilt version");
         require(resolve(entry, Operation.CONFIRM) == State.COMMITTED, "old exact retry preserves newer projection");
         require(journal.confirmedAuthority().current(ADMISSION).policyVersion() == 3, "latest projected version");
-        require(version(OTHER) == 1 && count(workflowOwner, PROJECTION) == 1, "other organization unchanged");
+        require(version(OTHER) == 1 && countScopeProjection() == 1, "other organization unchanged");
         require(businessCounts().equals(effects), "all resolver work leaves business and release rows intact");
         require(count(proofOwner, CONFIRMATION) == 2 && count(workflowOwner, WITNESS) == 2,
                 "only original workflow changes produce witnesses and confirmations");
@@ -238,7 +372,7 @@ public final class B11Postgresql {
         expect(AccessDeniedException.class, () -> resolver.resolve(credential(), ADMISSION, id, Operation.CONFIRM));
         expect(AccessDeniedException.class, () -> resolver.resolve(operator, OTHER_ADMISSION, id, Operation.CONFIRM));
         expect(AccessDeniedException.class, () -> resolver.resolve(confirmOnly, ADMISSION, id, Operation.ABORT));
-        var other = registerAndRollback(OTHER_ADMISSION);
+        var other = upgrade.unresolved();
         expect(AuthorityUnavailableException.class, () -> resolve(other, Operation.CONFIRM));
         expect(AuthorityUnavailableException.class,
                 () -> resolver.resolve(operator, ADMISSION, UUID.randomUUID(), Operation.CONFIRM));
@@ -319,6 +453,7 @@ public final class B11Postgresql {
         expect(AuthorityUnavailableException.class,
                 () -> interrupted.resolve(operator, ADMISSION, id, Operation.CONFIRM));
         require(state(entry) == State.COMMITTED, "confirmation committed before projection fault");
+        require(auditedTerminal(entry), "confirmation links its exact authorized decision");
         require(proofOwner.queryForObject("SELECT count(*) FROM " + AUDIT
                 + " WHERE attempt_id = ? AND terminal_state = 'COMMITTED' AND outcome = 'DEFERRED'", Long.class, id)
                 == 1, "audit separates terminal decision from deferred projection");
@@ -345,7 +480,7 @@ public final class B11Postgresql {
         require(resolve(entry, Operation.CONFIRM) == State.COMMITTED, "repair from proof");
         require(journal.confirmedAuthority().current(ADMISSION).equals(checkpoint), "exact projection repaired");
         expect(AuthorityUnavailableException.class, () -> publicAccess.requireCreate(ACTOR, TYPE, new PolicyGuard(SCOPE, 2)));
-        require(count(workflowOwner, PROJECTION) == 1, "one scope projection after retries");
+        require(countScopeProjection() == 1, "one scope projection after retries");
         System.out.println("PASS commit-to-projection cut stays fenced, exact retry rebuilds and corrupted projection defers");
         System.out.println("PASS projection requires owned exact exclusive scope, version and connection");
     }
@@ -353,20 +488,59 @@ public final class B11Postgresql {
     private void closeRolledBackAttempts() {
         expect(Rollback.class, () -> mutation.run(ADMISSION, DELTA, guard -> { throw new Rollback(); }));
         var numbered = journal.findUnresolved(ADMISSION).orElseThrow();
+        var preparing = new JdbcTemplate(preparationLogin);
+        var terminal = new JdbcTemplate(resolverLogin);
+        String change = "UPDATE " + ATTEMPTS + " SET state = ? WHERE attempt_id = ?";
+        UUID numberedId = numbered.attempt().id();
+        for (String state : List.of("ABORTED", "COMMITTED")) {
+            expectSql("42501", () -> preparing.update(change, state, numberedId));
+            expectSql("42501", () -> terminal.update(change, state, numberedId));
+        }
+        proofOwner.execute("GRANT UPDATE (state) ON " + ATTEMPTS + " TO b04_proof");
+        try {
+            expectSql("42501", () -> preparing.update(change, "ABORTED", numberedId));
+            expectSql("42501", () -> preparing.update(change, "COMMITTED", numberedId));
+            var stale = new JdbcScopeAuthorityJournal(preparationLogin, observer);
+            expect(AuthorityUnavailableException.class, () -> stale.abort(ADMISSION, numberedId));
+        } finally {
+            proofOwner.execute("REVOKE UPDATE (state) ON " + ATTEMPTS + " FROM b04_proof");
+        }
+        require(state(numbered) == State.PENDING && !auditedTerminal(numbered), "numbered dispute remains pending");
         publicDeferred();
         expect(AuthorityUnavailableException.class, () -> resolve(numbered, Operation.CONFIRM));
         require(resolve(numbered, Operation.ABORT) == State.ABORTED, "exact original abort");
         require(resolve(numbered, Operation.ABORT) == State.ABORTED, "abort retry");
+        require(auditedTerminal(numbered), "numbered closure links its authorized decision");
         require(journal.confirmedAuthority().current(ADMISSION).sequence() == numbered.sequence().orElseThrow(),
                 "numbered abort in projection");
+        requireMissingProvenanceFences(numbered);
         var registered = registerAndRollback(ADMISSION);
         require(registered.sequence().isEmpty(), "attempt still unnumbered");
         publicDeferred();
         require(resolve(registered, Operation.ABORT) == State.ABORTED, "unnumbered abort");
+        require(auditedTerminal(registered), "unnumbered closure links its authorized decision");
+        requireMissingProvenanceFences(registered);
         var late = journal.prepare(registered.attempt(), DELTA);
         require(late.state() == State.ABORTED && late.sequence().isEmpty(), "delayed prepare sees durable closure");
         require(journal.confirmedAuthority().current(ADMISSION).policyVersion() == 2, "abort preserves effective version");
         System.out.println("PASS original rollback closes numbered and unnumbered attempts idempotently, including late prepare");
+        System.out.println("PASS missing numbered and unnumbered terminal provenance fences admission and exact retry");
+    }
+
+    private void requireMissingProvenanceFences(Entry entry) {
+        UUID attempt = entry.attempt().id();
+        UUID audit = proofOwner.queryForObject("SELECT audit_id FROM " + TERMINAL + " WHERE attempt_id = ?", UUID.class, attempt);
+        require(audit != null && proofOwner.update("DELETE FROM " + TERMINAL + " WHERE attempt_id = ?", attempt) == 1,
+                "fixture removed the exact terminal provenance");
+        try {
+            publicDeferred();
+            expect(AuthorityUnavailableException.class, () -> resolve(entry, Operation.ABORT));
+            require(state(entry) == State.ABORTED, "absence of provenance does not rewrite the dispute");
+        } finally {
+            require(proofOwner.update("INSERT INTO " + TERMINAL + " (attempt_id, audit_id) VALUES (?, ?)", attempt, audit) == 1,
+                    "fixture restored the exact provenance");
+        }
+        journal.confirmedAuthority().current(ADMISSION);
     }
 
     private void reconcileAudit() {
@@ -394,12 +568,16 @@ public final class B11Postgresql {
     }
 
     private Entry registerAndRollback(Admission admission) {
+        return registerAndRollback(journal, admission);
+    }
+
+    private Entry registerAndRollback(JdbcScopeAuthorityJournal target, Admission admission) {
         expect(Rollback.class, () -> commandTx.run(() -> {
             var guard = commandGuards.lockExclusive(admission.genesis().organization()).orElseThrow();
-            journal.register(witnesses.begin(admission, guard, DELTA));
+            target.register(witnesses.begin(admission, guard, DELTA));
             throw new Rollback();
         }));
-        return journal.findUnresolved(admission).orElseThrow();
+        return target.findUnresolved(admission).orElseThrow();
     }
 
     private State resolve(Entry entry, Operation operation) {
@@ -440,6 +618,11 @@ public final class B11Postgresql {
 
     private static long count(JdbcTemplate jdbc, String table) {
         return jdbc.queryForObject("SELECT count(*) FROM " + table, Long.class);
+    }
+
+    private long countScopeProjection() {
+        return workflowOwner.queryForObject("SELECT count(*) FROM " + PROJECTION + " WHERE organization = ?",
+                Long.class, SCOPE.value());
     }
     private DataSource observerCut(String sqlFragment, Cut cut) {
         return source(() -> proxy(Connection.class, observer.getConnection(), (target, method, args) -> {
@@ -546,4 +729,5 @@ public final class B11Postgresql {
         Object invoke(Object target, Method method, Object[] args) throws Throwable;
     }
     private static final class Rollback extends RuntimeException { }
+    private record Upgrade(Entry numbered, Entry unnumbered, Entry unresolved) { }
 }

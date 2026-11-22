@@ -95,12 +95,14 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
                     || !"in progress".equals(originalWorkflow.status(connection, attempt))) {
                 throw new AuthorityUnavailableException();
             }
+            String stateColumn = confirmedProjection ? "" : ", state";
+            String stateValue = confirmedProjection ? "" : ", 'REGISTERED'";
             try (var insert = connection.prepareStatement("""
                     INSERT INTO request_authority.scope_journal_attempt (
                         attempt_id, organization, generation, workflow_transaction,
-                        before_version, after_version, delta_digest, state
-                    ) VALUES (?, ?, ?, CAST(? AS xid8), ?, ?, ?, 'REGISTERED')
-                    """)) {
+                        before_version, after_version, delta_digest%s
+                    ) VALUES (?, ?, ?, CAST(? AS xid8), ?, ?, ?%s)
+                    """.formatted(stateColumn, stateValue))) {
                 insert.setObject(1, attempt.id());
                 insert.setString(2, organization(admission));
                 insert.setLong(3, admission.writer().generation());
@@ -134,14 +136,18 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
                 throw new AuthorityUnavailableException();
             }
             long sequence = prefix.head() + 1;
+            // V004 derives PENDING from assigning the sequence. V003 still uses its original statement.
+            String prepareUpdate = confirmedProjection
+                    ? "UPDATE request_authority.scope_journal_attempt SET sequence = ? WHERE attempt_id = ? AND state = 'REGISTERED'"
+                    : """
+                      UPDATE request_authority.scope_journal_attempt SET sequence = ?, state = 'PENDING'
+                      WHERE attempt_id = ? AND state = 'REGISTERED'
+                      """;
             try (var payload = connection.prepareStatement("""
                     INSERT INTO request_authority.scope_journal_delta(attempt_id, delta_digest, exact_delta)
                     VALUES (?, ?, ?)
                     """);
-                 var pending = connection.prepareStatement("""
-                    UPDATE request_authority.scope_journal_attempt SET sequence = ?, state = 'PENDING'
-                    WHERE attempt_id = ? AND state = 'REGISTERED'
-                    """);
+                 var pending = connection.prepareStatement(prepareUpdate);
                  var advance = connection.prepareStatement("""
                     UPDATE request_authority.scope_journal_head SET last_sequence = ?
                     WHERE organization = ? AND last_sequence = ?
@@ -219,7 +225,7 @@ public final class JdbcScopeAuthorityJournal implements ScopeAuthorityJournal, S
         return admission.genesis().policyVersion();
     }
 
-    static Entry transition(Connection connection, Entry entry, State terminal) throws SQLException {
+    private static Entry transition(Connection connection, Entry entry, State terminal) throws SQLException {
         try (var update = connection.prepareStatement("""
                 UPDATE request_authority.scope_journal_attempt SET state = ?
                 WHERE attempt_id = ? AND state = ?
