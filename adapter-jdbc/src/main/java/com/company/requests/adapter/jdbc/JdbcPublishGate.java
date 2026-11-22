@@ -130,6 +130,14 @@ public final class JdbcPublishGate implements PublishGate {
                 attempt.resultRevision());
     }
 
+    static void requireHeld(DataSource workflow, PolicyGuard guard, RequestRef ref, long resultRevision) {
+        if (!(TransactionSynchronizationManager.getResource(HELD_GATE) instanceof Held held)
+                || held.workflow() != workflow || !held.guard().equals(guard)
+                || !held.attempt().ref().equals(ref) || held.attempt().resultRevision() != resultRevision) {
+            throw new IllegalStateException("The publication update requires the original command's namespace gate.");
+        }
+    }
+
     private record Target(RequestType type, long revision) {
     }
 

@@ -80,15 +80,32 @@ public final class JdbcWorkflowRecords implements RequestStore, ExistingRequestS
     public void advance(PolicyGuard guard, Request before, Request after) {
         JdbcTransactionRunner.requireExclusiveGuard(dataSource, guard);
         if (!guard.organization().equals(before.organization()) || !before.organization().equals(after.organization())
-                || !before.ref().equals(after.ref()) || !before.publicationId().equals(after.publicationId())
+                || !before.ref().equals(after.ref())
                 || after.revision() != Math.incrementExact(before.revision())) {
             throw new IllegalArgumentException("The lifecycle update must advance the same scoped request.");
         }
-        if (jdbc.update("""
-                UPDATE requests.request SET state = ?, revision = ?, last_sequence = ?
-                WHERE organization = ? AND ref = ? AND state = ? AND revision = ? AND last_sequence = ?
-                """, after.state().name(), after.revision(), after.lastSequence(), guard.organization().value(),
-                before.ref().value(), before.state().name(), before.revision(), before.lastSequence()) != 1) {
+        int updated;
+        if (before.state() == RequestState.ACCEPTED && after.state() == RequestState.PUBLISHED) {
+            JdbcPublishGate.requireHeld(dataSource, guard, before.ref(), after.revision());
+            updated = jdbc.update("""
+                    UPDATE requests.request SET state = ?, revision = ?, last_sequence = ?,
+                        publication_namespace = ?, publication_id = ?
+                    WHERE organization = ? AND ref = ? AND state = ? AND revision = ? AND last_sequence = ?
+                      AND publication_id IS NULL
+                    """, after.state().name(), after.revision(), after.lastSequence(), PublicationId.INITIAL_NAMESPACE,
+                    after.publicationId().orElseThrow().value(), guard.organization().value(), before.ref().value(),
+                    before.state().name(), before.revision(), before.lastSequence());
+        } else {
+            if (!before.publicationId().equals(after.publicationId())) {
+                throw new IllegalArgumentException("Only Publish may assign a publication ID.");
+            }
+            updated = jdbc.update("""
+                    UPDATE requests.request SET state = ?, revision = ?, last_sequence = ?
+                    WHERE organization = ? AND ref = ? AND state = ? AND revision = ? AND last_sequence = ?
+                    """, after.state().name(), after.revision(), after.lastSequence(), guard.organization().value(),
+                    before.ref().value(), before.state().name(), before.revision(), before.lastSequence());
+        }
+        if (updated != 1) {
             throw new AuthorityUnavailableException();
         }
     }

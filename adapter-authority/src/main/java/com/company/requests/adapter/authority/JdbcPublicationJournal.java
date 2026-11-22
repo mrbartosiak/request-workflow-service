@@ -27,11 +27,23 @@ public final class JdbcPublicationJournal implements PublicationJournal {
     private final ProofTransactions preparation;
     private final ProofTransactions resolution;
     private final OriginalPublicationProof original;
+    private final boolean auditedResolution;
 
     public JdbcPublicationJournal(DataSource preparation, DataSource resolution, DataSource originalObserver) {
+        this(preparation, resolution, originalObserver, false);
+    }
+
+    public static JdbcPublicationJournal withAuditedResolution(DataSource preparation, DataSource resolution,
+                                                                DataSource originalObserver) {
+        return new JdbcPublicationJournal(preparation, resolution, originalObserver, true);
+    }
+
+    private JdbcPublicationJournal(DataSource preparation, DataSource resolution, DataSource originalObserver,
+                                   boolean auditedResolution) {
         this.preparation = new ProofTransactions(preparation);
         this.resolution = new ProofTransactions(resolution);
         original = new OriginalPublicationProof(originalObserver);
+        this.auditedResolution = auditedResolution;
     }
 
     @Override
@@ -124,14 +136,14 @@ public final class JdbcPublicationJournal implements PublicationJournal {
     @Override
     public Entry confirm(Attempt attempt) {
         return change(resolution, attempt, connection -> {
+            requireResolution(connection, attempt, State.COMMITTED);
             Entry prior = requireEntry(connection, attempt);
-            if (prior.state() == State.COMMITTED) {
-                return prior;
+            if (prior.state() != State.COMMITTED) {
+                if (prior.state() != State.PENDING) {
+                    throw new AuthorityUnavailableException();
+                }
+                original.requireCommitted(connection, prior);
             }
-            if (prior.state() != State.PENDING) {
-                throw new AuthorityUnavailableException();
-            }
-            original.requireCommitted(connection, prior);
             return finish(connection, prior, State.COMMITTED);
         });
     }
@@ -139,21 +151,38 @@ public final class JdbcPublicationJournal implements PublicationJournal {
     @Override
     public Entry abort(Attempt attempt) {
         return change(resolution, attempt, connection -> {
+            requireResolution(connection, attempt, State.ABORTED);
             Entry prior = requireEntry(connection, attempt);
-            if (prior.state() == State.ABORTED) {
-                return prior;
-            }
             if (prior.state() == State.COMMITTED) {
                 throw new AuthorityUnavailableException();
             }
-            original.requireAborted(connection, attempt);
+            if (prior.state() != State.ABORTED) {
+                original.requireAborted(connection, attempt);
+            }
             return finish(connection, prior, State.ABORTED);
         });
     }
 
-    private static Entry finish(Connection connection, Entry prior, State terminal) throws SQLException {
-        try (var change = connection.prepareStatement("SELECT request_authority.finish_publication(?, ?)")) {
-            change.setObject(1, prior.attempt().id());
+    private void requireResolution(Connection connection, Attempt attempt, State terminal) throws SQLException {
+        if (auditedResolution) {
+            requireDecision(connection, "SELECT request_authority.may_resolve_publication(?, ?)", attempt, terminal);
+        }
+    }
+
+    private Entry finish(Connection connection, Entry prior, State terminal) throws SQLException {
+        if (auditedResolution) {
+            requireDecision(connection, "SELECT request_authority.finish_audited_publication(?, ?)",
+                    prior.attempt(), terminal);
+        } else if (prior.state() != terminal) {
+            requireDecision(connection, "SELECT request_authority.finish_publication(?, ?)", prior.attempt(), terminal);
+        }
+        return new Entry(prior.attempt(), prior.allocation(), terminal);
+    }
+
+    private static void requireDecision(Connection connection, String sql, Attempt attempt, State terminal)
+            throws SQLException {
+        try (var change = connection.prepareStatement(sql)) {
+            change.setObject(1, attempt.id());
             change.setString(2, terminal.name());
             try (var rows = change.executeQuery()) {
                 if (!rows.next() || !rows.getBoolean(1)) {
@@ -161,7 +190,6 @@ public final class JdbcPublicationJournal implements PublicationJournal {
                 }
             }
         }
-        return new Entry(prior.attempt(), prior.allocation(), terminal);
     }
 
     private static Entry requireEntry(Connection connection, Attempt attempt) throws SQLException {

@@ -10,6 +10,7 @@ import com.company.requests.domain.Request;
 import com.company.requests.domain.RequestBody;
 import com.company.requests.domain.RequestRef;
 import com.company.requests.domain.RequestState;
+import com.company.requests.domain.RequestState;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
@@ -147,6 +148,9 @@ public final class ActionContextService {
             lockTarget.orElseThrow().accept(guard, target.materialField());
             // Reread the exact target after acquiring its row and material locks.
             return inspect(actor, guard, ref, action);
+        }
+        if (target.request().state() == RequestState.PUBLISHED && access.confirmedPublication(guard, ref).isEmpty()) {
+            throw new AuthorityUnavailableException();
         }
         String material = switch (target.materialField()) {
             case BODY -> requests.findRetainedBody(guard.organization(), ref)

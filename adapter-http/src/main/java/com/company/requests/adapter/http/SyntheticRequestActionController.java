@@ -1,5 +1,6 @@
 package com.company.requests.adapter.http;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.company.requests.application.AuthenticatedActor;
 import com.company.requests.application.AuthorityUnavailableException;
 import com.company.requests.application.IntentDigest;
@@ -54,7 +55,7 @@ public final class SyntheticRequestActionController {
         });
     }
 
-    @PostMapping(path = "/requests/{ref}/actions/{action:verify|accept|delete|reject}",
+    @PostMapping(path = "/requests/{ref}/actions/{action:verify|accept|delete|reject|publish}",
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> transition(HttpServletRequest request, @PathVariable("ref") String ref,
                                         @PathVariable("action") String action) {
@@ -115,8 +116,9 @@ public final class SyntheticRequestActionController {
     private byte[] encode(OperationReceipt receipt) {
         return json.writeValueAsBytes(new MutationResult(receipt.resultRef().value(),
                 receipt.action().name().toLowerCase(Locale.ROOT), Long.toString(receipt.resultRevision()),
-                receipt.resultState().name()));
+                receipt.resultState().name(), receipt.publicationId().map(id -> Long.toString(id.value())).orElse(null)));
     }
 
-    private record MutationResult(String ref, String action, String resultRevision, String state) { }
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private record MutationResult(String ref, String action, String resultRevision, String state, String publicationId) { }
 }

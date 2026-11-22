@@ -45,4 +45,31 @@ public final class JdbcPublicationWitnessMigration {
             return null;
         });
     }
+
+    /** Adds the guarded original confirmation projection after the B16 witness schema. */
+    public void migrateConfirmations() {
+        migrate();
+        owner.run(() -> {
+            jdbc.execute("SELECT pg_advisory_xact_lock(1919250805, 1)");
+            if (Boolean.TRUE.equals(jdbc.queryForObject("""
+                    SELECT EXISTS (SELECT 1 FROM requests.publication_schema_migration WHERE version = 2)
+                    """, Boolean.class))) {
+                return null;
+            }
+            jdbc.execute("""
+                    ALTER TABLE requests.publication_schema_migration
+                        DROP CONSTRAINT publication_schema_migration_version_check,
+                        ADD CHECK (version IN (1, 2))
+                    """);
+            var script = new ResourceDatabasePopulator(
+                    new ClassPathResource("db/workflow/publication_confirmation_v2.sql"));
+            script.setSqlScriptEncoding("UTF-8");
+            jdbc.execute((ConnectionCallback<Void>) connection -> {
+                script.populate(connection);
+                return null;
+            });
+            jdbc.update("INSERT INTO requests.publication_schema_migration VALUES (2)");
+            return null;
+        });
+    }
 }

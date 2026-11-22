@@ -28,6 +28,7 @@ public final class SyntheticScopePolicy {
     private final Map<Principal, Grant> grants;
     private final Map<Principal, Set<Permission>> mutationOperators;
     private final Set<RequestType> assigneeOnlyOnAccept;
+    private final Set<RequestType> assigneeOnlyOnPublish;
 
     public SyntheticScopePolicy(OrganizationId organization, long version, Collection<Grant> entries) {
         Map<Principal, Grant> byPrincipal = new HashMap<>();
@@ -40,15 +41,18 @@ public final class SyntheticScopePolicy {
         grants = Map.copyOf(byPrincipal);
         mutationOperators = null;
         assigneeOnlyOnAccept = Set.of();
+        assigneeOnlyOnPublish = Set.of();
         genesis = new ScopeAuthority.Genesis(organization, version, fingerprint(organization, version));
     }
 
     private SyntheticScopePolicy(ScopeAuthority.Genesis genesis, Map<Principal, Grant> grants,
-                                 Map<Principal, Set<Permission>> mutationOperators, Set<RequestType> assigneeOnlyOnAccept) {
+                                 Map<Principal, Set<Permission>> mutationOperators, Set<RequestType> assigneeOnlyOnAccept,
+                                 Set<RequestType> assigneeOnlyOnPublish) {
         this.genesis = genesis;
         this.grants = grants;
         this.mutationOperators = mutationOperators;
         this.assigneeOnlyOnAccept = assigneeOnlyOnAccept;
+        this.assigneeOnlyOnPublish = assigneeOnlyOnPublish;
     }
 
     /** Certifies the immutable B10 operator rights alongside the ordinary directory and grants. */
@@ -80,20 +84,30 @@ public final class SyntheticScopePolicy {
         });
         var effective = new ScopeAuthority.Genesis(genesis.organization(), genesis.policyVersion(),
                 HexFormat.of().formatHex(digest.digest()));
-        return new SyntheticScopePolicy(effective, grants, Map.copyOf(bound), assigneeOnlyOnAccept);
+        return new SyntheticScopePolicy(effective, grants, Map.copyOf(bound), assigneeOnlyOnAccept, assigneeOnlyOnPublish);
     }
 
     /** Certifies the opt-in synthetic rule that restricts accepted rows to their assignee. */
     public SyntheticScopePolicy withAssigneeOnlyOnAccept(Set<RequestType> types) {
+        return withAssigneeOnly(types, assigneeOnlyOnAccept, "accepted", Action.ACCEPT);
+    }
+
+    /** Certifies the opt-in synthetic rule that restricts published rows to their assignee. */
+    public SyntheticScopePolicy withAssigneeOnlyOnPublish(Set<RequestType> types) {
+        return withAssigneeOnly(types, assigneeOnlyOnPublish, "published", Action.PUBLISH);
+    }
+
+    private SyntheticScopePolicy withAssigneeOnly(Set<RequestType> types, Set<RequestType> prior, String state,
+                                                Action action) {
         var exact = Set.copyOf(types);
         if (exact.isEmpty()) {
             return this;
         }
-        if (!assigneeOnlyOnAccept.isEmpty()) {
-            throw new IllegalStateException("Accepted visibility is already bound.");
+        if (!prior.isEmpty()) {
+            throw new IllegalStateException("Assignee visibility is already bound for this action.");
         }
         var digest = sha256();
-        add(digest, "requests.synthetic-scope.accepted-assignee-visibility.v1");
+        add(digest, "requests.synthetic-scope." + state + "-assignee-visibility.v1");
         add(digest, genesis.policyDigest());
         for (RequestType type : RequestType.values()) {
             add(digest, type.name());
@@ -101,7 +115,9 @@ public final class SyntheticScopePolicy {
         }
         var effective = new ScopeAuthority.Genesis(genesis.organization(), genesis.policyVersion(),
                 HexFormat.of().formatHex(digest.digest()));
-        return new SyntheticScopePolicy(effective, grants, mutationOperators, exact);
+        return new SyntheticScopePolicy(effective, grants, mutationOperators,
+                action == Action.ACCEPT ? exact : assigneeOnlyOnAccept,
+                action == Action.PUBLISH ? exact : assigneeOnlyOnPublish);
     }
 
     Optional<EffectiveScopeChange.SetVisibility> visibilityChange(Action action, Request request, Visibility current) {
@@ -111,7 +127,12 @@ public final class SyntheticScopePolicy {
             var next = new Visibility(Math.incrementExact(current.version()), current.assigneeOnly(), fields);
             return Optional.of(new EffectiveScopeChange.SetVisibility(request.ref(), current, next));
         }
-        if (action != Action.ACCEPT || !assigneeOnlyOnAccept.contains(request.type()) || current.assigneeOnly()) {
+        var restricted = switch (action) {
+            case ACCEPT -> assigneeOnlyOnAccept;
+            case PUBLISH -> assigneeOnlyOnPublish;
+            default -> Set.<RequestType>of();
+        };
+        if (!restricted.contains(request.type()) || current.assigneeOnly()) {
             return Optional.empty();
         }
         var next = new Visibility(Math.incrementExact(current.version()), true, current.fields());

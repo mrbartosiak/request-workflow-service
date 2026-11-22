@@ -6,6 +6,7 @@ import com.company.requests.application.EffectiveScopeStore.Grant;
 import com.company.requests.application.EffectiveScopeStore.GrantKey;
 import com.company.requests.application.EffectiveScopeStore.Visibility;
 import com.company.requests.application.ScopeAuthority.Admission;
+import com.company.requests.domain.PublicationId;
 import com.company.requests.domain.Action;
 import com.company.requests.domain.OrganizationId;
 import com.company.requests.domain.Request;
@@ -40,9 +41,16 @@ public final class CurrentAccess {
                                                    TransactionRunner transactions, PolicyGuardStore guards,
                                                    RequestStore requests, EffectiveScopeStore store,
                                                    EffectiveScopeGate gate) {
+        return withEffectiveScope(writer, policies, transactions, guards, requests, store, gate, Optional.empty());
+    }
+
+    public static CurrentAccess withEffectiveScope(WriterEpoch writer, Collection<SyntheticScopePolicy> policies,
+                                                   TransactionRunner transactions, PolicyGuardStore guards,
+                                                   RequestStore requests, EffectiveScopeStore store,
+                                                   EffectiveScopeGate gate, Optional<PublicationProof> publication) {
         return new CurrentAccess(null, writer, policies, new Effective(Objects.requireNonNull(transactions),
                 Objects.requireNonNull(guards), Objects.requireNonNull(requests), Objects.requireNonNull(store),
-                Objects.requireNonNull(gate)));
+                Objects.requireNonNull(gate), Objects.requireNonNull(publication)));
     }
 
     private CurrentAccess(ScopeAuthority authority, WriterEpoch writer, Collection<SyntheticScopePolicy> policies,
@@ -142,6 +150,39 @@ public final class CurrentAccess {
         return requireProof(policy, guard);
     }
 
+    /** Publication prerequisite for an internal dispatcher already holding this organization's guard. */
+    public Optional<PublicationId> confirmedPublication(PolicyGuard guard, RequestRef ref) {
+        var admission = requireDispatchScope(guard);
+        return effective.publication().flatMap(proof -> effective.requests().find(guard.organization(), ref)
+                .filter(request -> request.ref().equals(ref))
+                .flatMap(request -> proof.confirmed(admission, guard, request, Optional.empty()))
+                .flatMap(PublicationJournal.Entry::allocation));
+    }
+
+    /** Independently authorize the field and prove its association on the caller's organization guard. */
+    public Optional<PublicationId> permittedPublicationId(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref) {
+        var admission = requireActionScope(actor, guard);
+        var policy = policy(actor);
+        return effective.publication().flatMap(proof -> scopedTarget(actor, guard, ref)
+                .filter(target -> target.state() == RequestState.PUBLISHED)
+                .filter(target -> permitted(policy, guard, actor, Grant.ROW_READ, target.type()))
+                .filter(target -> rowScope(actor, guard, target).visible())
+                .filter(target -> permitsPublicationField(actor, guard, target))
+                .flatMap(target -> proof.confirmed(admission, guard, target, Optional.empty()))
+                .flatMap(PublicationJournal.Entry::allocation));
+    }
+
+    boolean hasOriginalPublication(Admission admission, PolicyGuard guard, OperationReceipt receipt) {
+        try {
+            return effective.publication().flatMap(proof -> effective.requests()
+                    .find(guard.organization(), receipt.resultRef())
+                    .flatMap(request -> proof.confirmed(admission, guard, request, Optional.of(receipt))))
+                    .isPresent();
+        } catch (AuthorityUnavailableException unavailable) {
+            return false;
+        }
+    }
+
     SubmittedAction requireSubmittedAction(AuthenticatedActor actor, RequestRef ref, Action action) {
         var guard = shared(actor);
         return requireSubmittedAction(actor, guard, ref, action);
@@ -185,15 +226,22 @@ public final class CurrentAccess {
                 case VERIFY -> Grant.RESULT_READ_VERIFY;
                 case ACCEPT -> Grant.RESULT_READ_ACCEPT;
                 case REJECT -> Grant.RESULT_READ_REJECT;
+                case PUBLISH -> Grant.RESULT_READ_PUBLISH;
                 default -> null;
             };
             return resultGrant != null && actionTarget(actor, guard, receipt.resultRef(), receipt.action())
                     .filter(target -> target.visibility().fields().containsAll(RESULT_FIELDS))
                     .filter(target -> permitted(policy(actor), guard, actor, resultGrant, target.request().type()))
+                    .filter(target -> receipt.action() != Action.PUBLISH
+                            || permitsPublicationField(actor, guard, target.request()))
                     .isPresent();
         } catch (AccessDeniedException denied) {
             return false;
         }
+    }
+
+    private boolean permitsPublicationField(AuthenticatedActor actor, PolicyGuard guard, Request target) {
+        return permitted(policy(actor), guard, actor, Grant.FIELD_READ_PUBLICATION_ID, target.type());
     }
 
     /** The caller has proved the current scope on the guard before asking about a target. */
@@ -348,5 +396,5 @@ public final class CurrentAccess {
     }
 
     private record Effective(TransactionRunner transactions, PolicyGuardStore guards, RequestStore requests,
-                             EffectiveScopeStore store, EffectiveScopeGate gate) { }
+                             EffectiveScopeStore store, EffectiveScopeGate gate, Optional<PublicationProof> publication) { }
 }

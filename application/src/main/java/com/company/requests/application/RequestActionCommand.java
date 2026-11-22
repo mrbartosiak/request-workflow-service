@@ -3,15 +3,18 @@ package com.company.requests.application;
 import com.company.requests.application.ActionContextService.Verified;
 import com.company.requests.application.OperationKeyIssuer.Eligibility;
 import com.company.requests.application.OperationKeyIssuer.VerifiedKey;
+import com.company.requests.application.PublicationJournal.Entry;
 import com.company.requests.application.ReceiptReplay.ExecutionWindowClosed;
 import com.company.requests.application.ScopeAuthority.Admission;
 import com.company.requests.domain.Action;
 import com.company.requests.domain.Lifecycle;
+import com.company.requests.domain.PublicationId;
 import com.company.requests.domain.Request;
 import com.company.requests.domain.RequestBody;
 import com.company.requests.domain.RequestRef;
 import com.company.requests.domain.TransitionFact;
 import com.company.requests.domain.TransitionReason;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -33,6 +36,7 @@ public final class RequestActionCommand {
     private final ScopeAuthorityMutation scopeMutation;
     private final GuardedRelease release;
     private final ReceiptReplay replay;
+    private final Optional<PublishExecution> publication;
 
     public RequestActionCommand(TransactionRunner transactions, CurrentAccess access, WriterLineage lineage,
                                 OperationKeyIssuer keys, IntentDigest digests, ReceiptStore receipts,
@@ -40,6 +44,17 @@ public final class RequestActionCommand {
                                 ActionContextService contexts, SyntheticScopePolicy policy, EffectiveScopeStore scope,
                                 ScopeAuthorityMutation scopeMutation, GuardedRelease release,
                                 ReleasePreparation preparation, OriginalReceiptProof originalReceipts) {
+        this(transactions, access, lineage, keys, digests, receipts, claims, requests, effects, contexts,
+                policy, scope, scopeMutation, release, preparation, originalReceipts, Optional.empty());
+    }
+
+    public RequestActionCommand(TransactionRunner transactions, CurrentAccess access, WriterLineage lineage,
+                                OperationKeyIssuer keys, IntentDigest digests, ReceiptStore receipts,
+                                ReceiptClaims claims, RequestStore requests, ExistingRequestStore effects,
+                                ActionContextService contexts, SyntheticScopePolicy policy, EffectiveScopeStore scope,
+                                ScopeAuthorityMutation scopeMutation, GuardedRelease release,
+                                ReleasePreparation preparation, OriginalReceiptProof originalReceipts,
+                                Optional<PublishExecution> publication) {
         this.transactions = transactions;
         this.access = access;
         this.lineage = lineage;
@@ -53,6 +68,7 @@ public final class RequestActionCommand {
         this.scope = scope;
         this.scopeMutation = scopeMutation;
         this.release = release;
+        this.publication = Objects.requireNonNull(publication);
         replay = new ReceiptReplay(receipts, access, keys, digests, preparation, release, originalReceipts);
     }
 
@@ -72,9 +88,6 @@ public final class RequestActionCommand {
 
     public Result transition(AuthenticatedActor actor, String key, IntentDigest.Transition intent,
                              Function<OperationReceipt, byte[]> encode) {
-        if (intent.action() == Action.PUBLISH) {
-            throw new IllegalArgumentException("Publish requires the publication command.");
-        }
         return execute(actor, key, new Submission(intent.action(), intent.ref(), intent.observation(), intent), encode);
     }
 
@@ -142,6 +155,13 @@ public final class RequestActionCommand {
         var request = verified.request();
         var guard = verified.guard();
         var admission = verified.admission();
+        if (submitted.action() == Action.PUBLISH) {
+            var publisher = publication.orElseThrow(AuthorityUnavailableException::new);
+            if (publisher.journal().activeBinding(admission.writer(), guard.organization(), request.type(),
+                    request.ref()).isPresent()) {
+                throw new AuthorityUnavailableException();
+            }
+        }
         var scopeEdit = policy.visibilityChange(submitted.action(), request, verified.visibility());
         if (scopeEdit.isPresent()) {
             var change = new EffectiveScopeChange(guard, actor, scopeEdit.orElseThrow());
@@ -163,6 +183,7 @@ public final class RequestActionCommand {
         var guard = verified.guard();
         var before = verified.request();
         Request after;
+        Optional<Entry> reserved = Optional.empty();
         if (submitted.intent() instanceof IntentDigest.Edit edit) {
             var effect = Lifecycle.edit(before, new RequestBody(edit.body()));
             after = effect.request();
@@ -170,11 +191,15 @@ public final class RequestActionCommand {
             effects.replaceBody(guard, before.ref(), effect.body());
         } else {
             var intent = (IntentDigest.Transition) submitted.intent();
+            if (submitted.action() == Action.PUBLISH) {
+                reserved = Optional.of(reserve(verified, key));
+            }
             Lifecycle.TransitionCommand transition = switch (submitted.action()) {
                 case VERIFY -> new Lifecycle.Verify();
                 case ACCEPT -> new Lifecycle.Accept();
                 case DELETE -> new Lifecycle.Delete(new TransitionReason(intent.reason().orElseThrow()));
                 case REJECT -> new Lifecycle.Reject(new TransitionReason(intent.reason().orElseThrow()));
+                case PUBLISH -> new Lifecycle.Publish(reserved.flatMap(Entry::allocation).orElseThrow());
                 default -> throw new IllegalStateException("Unexpected request action.");
             };
             var effect = Lifecycle.transition(before, transition,
@@ -184,8 +209,26 @@ public final class RequestActionCommand {
             requests.appendFact(guard.organization(), effect.transition());
             effect.reason().ifPresent(reason -> effects.appendReason(guard, effect.transition(), reason));
         }
-        claims.finalizeReceipt(new OperationReceipt(key.receiptKey(), digest, key.generation(), key.expiresAt(),
-                submitted.action(), after.ref(), after.revision(), after.state(), Optional.empty(), 200));
+        var receipt = new OperationReceipt(key.receiptKey(), digest, key.generation(), key.expiresAt(),
+                submitted.action(), after.ref(), after.revision(), after.state(), after.publicationId(), 200);
+        claims.finalizeReceipt(receipt);
+        reserved.ifPresent(entry -> publication.orElseThrow().gate().appendWitness(entry, receipt));
+    }
+
+    private Entry reserve(Verified verified, VerifiedKey key) {
+        var publisher = publication.orElseThrow();
+        var before = verified.request();
+        var attempt = publisher.gate().acquire(verified.guard(), verified.admission().writer(),
+                before.ref(), key.receiptKey());
+        var registered = publisher.journal().register(attempt);
+        if (!registered.attempt().equals(attempt) || registered.state() != PublicationJournal.State.REGISTERED) {
+            throw new AuthorityUnavailableException();
+        }
+        var reserved = publisher.journal().reserve(attempt);
+        if (!reserved.attempt().equals(attempt) || reserved.state() != PublicationJournal.State.PENDING) {
+            throw new AuthorityUnavailableException();
+        }
+        return reserved;
     }
 
     private Result releaseRejection(AuthenticatedActor actor, VerifiedKey key, Function<PolicyGuard, Admission> authorize,
@@ -217,6 +260,14 @@ public final class RequestActionCommand {
     private record AuthorizedKey(Admission admission, VerifiedKey key, boolean lookupOnly) { }
 
     private record Submission(Action action, RequestRef ref, String observation, IntentDigest.Intent intent) { }
+
+    /** Command-side publication dependencies. Resolution is held on a separate private path. */
+    public record PublishExecution(PublishGate gate, PublicationJournal journal) {
+        public PublishExecution {
+            Objects.requireNonNull(gate);
+            Objects.requireNonNull(journal);
+        }
+    }
 
     private static final class RejectedEffect extends RuntimeException {
         private final Rejection rejection;

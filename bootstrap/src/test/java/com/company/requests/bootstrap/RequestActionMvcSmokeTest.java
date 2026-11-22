@@ -45,7 +45,8 @@ class RequestActionMvcSmokeTest {
                     MockMvcRequestBuilders.post("/requests/example/actions/verify?unexpected=value"),
                     MockMvcRequestBuilders.post("/requests/example/actions/accept?unexpected=value"),
                     MockMvcRequestBuilders.post("/requests/example/actions/delete?unexpected=value"),
-                    MockMvcRequestBuilders.post("/requests/example/actions/reject?unexpected=value"));
+                    MockMvcRequestBuilders.post("/requests/example/actions/reject?unexpected=value"),
+                    MockMvcRequestBuilders.post("/requests/example/actions/publish?unexpected=value"));
             org.junit.jupiter.api.Assertions.assertAll(requests.stream().map(input -> () -> {
                 var response = mvc.perform(input).andReturn().getResponse();
                 assertEquals(401, response.getStatus());

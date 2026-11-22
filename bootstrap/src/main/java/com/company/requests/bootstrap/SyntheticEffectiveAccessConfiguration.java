@@ -1,6 +1,7 @@
 package com.company.requests.bootstrap;
 
 import com.company.requests.adapter.authority.JdbcCreateProof;
+import com.company.requests.adapter.authority.JdbcPublicationJournal;
 import com.company.requests.adapter.authority.JdbcScopeAuthorityJournal;
 import com.company.requests.adapter.authority.JdbcScopeAuthorityResolver;
 import com.company.requests.adapter.http.RestInputValidator;
@@ -8,6 +9,8 @@ import com.company.requests.adapter.http.SyntheticActionContextController;
 import com.company.requests.adapter.http.SyntheticCreateController;
 import com.company.requests.adapter.http.SyntheticRequestActionController;
 import com.company.requests.adapter.jdbc.JdbcEffectiveScopeStore;
+import com.company.requests.adapter.jdbc.JdbcPublicationConfirmationStore;
+import com.company.requests.adapter.jdbc.JdbcPublishGate;
 import com.company.requests.adapter.jdbc.JdbcReceiptStore;
 import com.company.requests.adapter.jdbc.JdbcScopeAuthorityWitnesses;
 import com.company.requests.adapter.jdbc.JdbcScopeProjectionStore;
@@ -24,6 +27,8 @@ import com.company.requests.application.GuardedRelease;
 import com.company.requests.application.IntentDigest;
 import com.company.requests.application.ObservationCodec;
 import com.company.requests.application.OperationKeyIssuer;
+import com.company.requests.application.PublicationProof;
+import com.company.requests.application.PublicationProofResolver;
 import com.company.requests.application.RequestActionCommand;
 import com.company.requests.application.ScopeAuthorityMutation;
 import com.company.requests.application.ScopeProofResolver;
@@ -49,16 +54,26 @@ public class SyntheticEffectiveAccessConfiguration {
     public record Settings(SyntheticCreateConfiguration.Settings create, DataSource preparation,
                            DataSource originalObserver, DataSource projection, DataSource resolver,
                            Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators,
-                           Optional<ObservationCodec.Keys> observationKeys) {
+                           Optional<ObservationCodec.Keys> observationKeys, boolean publicationEnabled) {
         public Settings(SyntheticCreateConfiguration.Settings create, DataSource preparation,
                         DataSource originalObserver, DataSource projection, DataSource resolver,
                         Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators) {
-            this(create, preparation, originalObserver, projection, resolver, operators, Optional.empty());
+            this(create, preparation, originalObserver, projection, resolver, operators, Optional.empty(), false);
+        }
+
+        public Settings(SyntheticCreateConfiguration.Settings create, DataSource preparation,
+                        DataSource originalObserver, DataSource projection, DataSource resolver,
+                        Map<AuthenticatedActor, Set<EffectiveScopeUpdates.Permission>> operators,
+                        Optional<ObservationCodec.Keys> observationKeys) {
+            this(create, preparation, originalObserver, projection, resolver, operators, observationKeys, false);
         }
 
         public Settings {
             Objects.requireNonNull(create);
             Objects.requireNonNull(observationKeys);
+            if (publicationEnabled && (observationKeys.isEmpty() || create.guardedReplay().isEmpty())) {
+                throw new IllegalArgumentException("Publish requires observation keys and guarded replay.");
+            }
             var sources = List.of(create.command(), create.proof(), preparation, originalObserver, projection, resolver);
             Set<DataSource> distinct = Collections.newSetFromMap(new IdentityHashMap<>());
             distinct.addAll(sources);
@@ -81,7 +96,8 @@ public class SyntheticEffectiveAccessConfiguration {
 
     public record Components(CurrentAccess access, CreateCommand create, EffectiveScopeUpdates updates,
                              ScopeProofResolver resolver, Optional<ActionContextService> actionContext,
-                             Optional<RequestActionCommand> requestActions) { }
+                             Optional<RequestActionCommand> requestActions,
+                             Optional<PublicationProofResolver> publicationResolver) { }
 
     @Bean
     public static Components effectiveScopeComponents(Settings settings) {
@@ -94,16 +110,30 @@ public class SyntheticEffectiveAccessConfiguration {
         var journal = JdbcScopeAuthorityJournal.withConfirmedProjection(settings.preparation(), settings.originalObserver());
         var proof = new JdbcCreateProof(create.proof());
         var workflow = new JdbcWorkflowIdentity(command);
+        var publisher = settings.publicationEnabled() ? Optional.of(new RequestActionCommand.PublishExecution(
+                new JdbcPublishGate(command),
+                new JdbcPublicationJournal(settings.preparation(), settings.preparation(), settings.originalObserver())))
+                : Optional.<RequestActionCommand.PublishExecution>empty();
         var gate = new EffectiveScopeGate(journal.confirmedAuthority(),
                 admission -> proof.requireWriter(admission, workflow.current()), store);
         var access = CurrentAccess.withEffectiveScope(create.writer(), List.of(policy),
-                transactions, records, records, store, gate);
+                transactions, records, records, store, gate,
+                publisher.map(value -> new PublicationProof(value.journal(), new JdbcPublicationConfirmationStore(command))));
         var mutation = new ScopeAuthorityMutation(transactions, records, journal, new JdbcScopeAuthorityWitnesses(command));
         var updates = new EffectiveScopeUpdates(policy, create.writer(), mutation, gate, store, records);
         var projector = settings.projection();
-        var resolver = new ScopeProofResolver(JdbcTransactionRunner.forCreate(projector), new JdbcWorkflowRecords(projector),
+        var projectionTransactions = JdbcTransactionRunner.forCreate(projector);
+        var projectionRecords = new JdbcWorkflowRecords(projector);
+        var projectionIdentity = new JdbcWorkflowIdentity(projector);
+        var resolver = new ScopeProofResolver(projectionTransactions, projectionRecords,
                 new JdbcScopeAuthorityResolver(settings.resolver(), settings.originalObserver()),
                 new JdbcScopeProjectionStore(projector));
+        var publicationResolver = publisher.map(ignored -> new PublicationProofResolver(projectionTransactions,
+                projectionRecords,
+                JdbcPublicationJournal.withAuditedResolution(settings.preparation(), settings.resolver(),
+                        settings.originalObserver()),
+                new JdbcPublicationConfirmationStore(projector),
+                admission -> proof.requireWriter(admission, projectionIdentity.current())));
         var contexts = settings.observationKeys().map(keys -> new ActionContextService(access, records, records,
                 new GuardedRelease(transactions, records, records, access, Duration.ofMillis(2400)),
                 new ObservationCodec(keys, create.secrets()), create.clock()));
@@ -115,10 +145,10 @@ public class SyntheticEffectiveAccessConfiguration {
                     replay.handoffs());
             return new RequestActionCommand(transactions, access, admission -> proof.requireWriter(admission, workflow.current()),
                     keys, new IntentDigest(create.secrets()), receipts, receipts, records, records, context, policy,
-                    store, mutation, release, replay.preparation(), replay.originalReceipts());
+                    store, mutation, release, replay.preparation(), replay.originalReceipts(), publisher);
         }));
         return new Components(access, SyntheticCreateConfiguration.createCommand(create, transactions, records, access),
-                updates, resolver, contexts, actions);
+                updates, resolver, contexts, actions, publicationResolver);
     }
 
     @Bean

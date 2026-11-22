@@ -51,6 +51,7 @@ final class ReceiptReplay {
                    ReleaseBuffer buffer, long started, Rejection missingActiveReceipt) {
         boolean past = key.eligibility() == Eligibility.PAST_GENERATION_LOOKUP_ONLY;
         var foundTrusted = new boolean[1];
+        var publicationUnproved = new boolean[1];
         var outcome = release.handoff(actor.organization(), authorize, () -> {
             if (!keys.isFresh(key)) {
                 return false;
@@ -62,8 +63,10 @@ final class ReceiptReplay {
                     .filter(receipt -> access.usesEffectiveScope() || receipt.action() == Action.CREATE);
             foundTrusted[0] = found.isPresent();
             return found.filter(receipt -> release.permitsReceipt(actor, current.guard(), receipt))
+                    .filter(receipt -> publicationProved(current, receipt, publicationUnproved))
                     .map(receipt -> new GuardedRelease.Prepared(payload(current.admission(), receipt, intent, encode),
-                            checked -> release.permitsReceipt(actor, checked.guard(), receipt)));
+                            checked -> release.permitsReceipt(actor, checked.guard(), receipt)
+                                    && publicationProved(checked, receipt, publicationUnproved)));
         }, buffer);
         return switch (outcome) {
             case HANDED_OFF -> {
@@ -73,9 +76,18 @@ final class ReceiptReplay {
             }
             case FRESHNESS_LOST -> Rejection.EXPIRED;
             case WITHHELD -> past ? Rejection.FENCED
+                    : publicationUnproved[0] ? Rejection.OUTCOME_UNKNOWN
                     : foundTrusted[0] ? Rejection.CONCEALED : missingActiveReceipt;
             case BUFFER_UNAVAILABLE, BUDGET_EXCEEDED -> Rejection.OUTCOME_UNKNOWN;
         };
+    }
+
+    private boolean publicationProved(GuardedRelease.Context current, OperationReceipt receipt, boolean[] unproved) {
+        if (receipt.action() != Action.PUBLISH) {
+            return true;
+        }
+        unproved[0] = !access.hasOriginalPublication(current.admission(), current.guard(), receipt);
+        return !unproved[0];
     }
 
     private Optional<OperationReceipt> find(Admission current, VerifiedKey key, boolean past) {
