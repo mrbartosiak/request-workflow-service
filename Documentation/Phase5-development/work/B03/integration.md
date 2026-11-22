@@ -1,0 +1,5 @@
+# B03 integration and handoff
+
+On 2026-11-22 (Europe/Warsaw), the coordinator fast-forwarded local `master` from `d1c34c7a781ae57ac94b258f998ac1958424100e` to independently approved `bdfbc00ec21a39aec37354e9ab77ce552a75feee`. The integration checkout passed offline `clean verify` across all 11 reactor projects and 286 tests, including 126 HTTP boundary tests, 156 lifecycle tests and four bootstrap tests. The integration log SHA-256 is `e58be12bc2effbf30a42df49c96ed262afa817ad1303e4df8dcaf9a223b5ba89`. [Authority](../g0-kickoff.md) · [Review](review.md) · [Integration log](../../../tmp/phase5-development/b03-tools/logs/b03-integrated-offline-verify.log)
+
+The MVC suite exercised 169 requests and verified zero mutation calls for all 142 input rejections. `RestInputValidator`, `RestInputs` and `RestProblems` are the handoff for B06–B08, B13–B15, B17 and B19–B21. B45 owns real connector qualification for duplicate header handling, encoded ingress limits and read deadlines. Use `mvn -o -B -C -pl adapter-http -am verify` with the adopted Maven settings and JDK. [Exact commands and outgoing contracts](evidence.md#successor-handoff)

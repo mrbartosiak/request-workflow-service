@@ -1,0 +1,7 @@
+# G0 owner approval · Phase 5 wave 2
+
+**Approved 2026-11-22 (Europe/Warsaw).** The owner replied “Approved” directly to the [Wave 2 scope](g0-wave2-request.md) SHA-256 `4cbbff002f290bd22dd079cddbab2482865fba04eeee8458d03c5ae3527cb079`. The approval covers B09–B12, B32 and B41 under the accepted `PH4-PLAN-r1`, manifest SHA-256 `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6`. Integrated M1 base `9469405a1e4b8bb1a345158f6b54d93ea59772ce`, tree `e82759ffe33f9492143d05b1e3e4ada65054e084`. [M1](m1.md)
+
+This owner-facing Phase 5 chat (`01a20384-5640-7e60-8740-82d48391adf0`) owns the ledger and integrations. Use fresh GPT-6.2 Sol xhigh (56) and independent GPT-6.2 Astra xhigh (62) for B09–B12 and B32, and fresh Sol high (55) and independent Astra high (60) for B41. Dispatch in predecessor order, keep contract and fixture ownership explicit, and integrate only the exact independently reviewed revision. B09, B32 and B41 meet their integrated prerequisites at kickoff. [Ledger](ledger.md) · [Runbook](../../Phase4.5-development-workflow/development-workflow.md)
+
+The authorized work uses the bounded [G1-U extension](g1-u-wave2-approval.md) and [G0-B reuse extension](g0-b-wave2-approval.md). Additional dependencies or provisioning, production work, public publication, formal workloads and later tickets require their applicable approvals. [Action gates](../../Phase4-development-planning/choices.md#later-authorizations)

@@ -1,0 +1,9 @@
+# B02 lifecycle independent review
+
+**Approved on 2026-11-22 (Europe/Warsaw).** GPT-6.2 Astra medium (57) reviewed GPT-6.2 Sol medium (53) on accepted `PH4-PLAN-r1`. Base `056c4e0bbb74df16b16684aad5fa1dc82cf1f22a`, exact candidate `d1c34c7a781ae57ac94b258f998ac1958424100e`, tree `6ddb2f20a477533b41ea87d3d3c4a478aa9fa08c`. Frozen evidence SHA-256 `a5326b792c1883011d5b70d1ad1063223800815e6bb4041987193bf53c444860`; all four executor raw logs matched. [Evidence](evidence.md) · [Assignment](assignment.md)
+
+All 17 changed files are in the domain module. The reviewer checked 147 state and action combinations across the three initial types, all four terminal paths per type, immutable identity and name, edits, required reasons, checked counters, publication IDs, separate revision and history effects, and the pure policy contract. The baseline lacked the domain types. Perturbing terminal edit eligibility and transition sequences caused 12 expected assertion failures. The delivered revision passed the complete suite. [Domain design](../../../Phase3-LLD/domain.md) · [B02 ticket](../../../Phase4-development-planning/foundation.md#b02--shared-state-machine-and-invariants)
+
+Independent `clean verify` used a Git archive of the exact commit and a separate offline cache. All 11 reactor projects and 160 tests passed, including 156 domain tests. The domain JAR and dependency JSON matched the executor’s digests. `jdeps` reported `java.base` as its sole production dependency. The independent log SHA-256 is `974ccf6293f424736e9485d883bb0adb09d028617dd446fd13bac2d8278455e5`. [Independent offline log](../../../tmp/phase5-development/b02-astra-d1c34c7/verify.log)
+
+**Disposition** No findings. B08 and B13–B17 can consume the reviewed domain effects and policy contract. Those tickets own their trusted grants, distinct-person checks, publication ordering, transactions, replay and HTTP or restart proofs.

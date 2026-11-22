@@ -1,0 +1,22 @@
+# D3 · Public wire and browse contract
+
+**Governs** DEC-06/08/11/13, F-01–08, Q-04/11–13. Both candidates prefer named unversioned operations, explicit type and action context. Exact wire needs approval. DEC-11 delegates reasonable configured bounds. Default page 10, exact authorized filters, masking and stable live order bind. [Owner direction](../../owner-kickoff.md) · [HLD REST](../../../Phase2-HLD/rest-and-browsing.md)
+
+**D3-R recommendation.** Approve the following contract baseline with D1/D2 conditions. Implement strict Spring MVC entry validation and vetted encoding. [C1 REST](../candidate-1/rest.md) · [C2 REST](../candidate-2/rest.md) · [Form rules](comparison-form-rules.md)
+
+| Surface | Proposed baseline |
+| --- | --- |
+| Write and read routes | C1 named routes. `POST /requests` requires explicit `HR_TICKET`, `BUG_REPORT` or `INTERNAL_REQUEST`, name and body. Return 201 and authorized opaque ref and Location. Edit via `PATCH /requests/{ref}/body`. Transition via `POST /requests/{ref}/actions/{action}` with `verify`, `accept`, `reject`, `delete` or `publish`. Reject/Delete need reason. Detail, browse and history use GET. All writes use `Idempotency-Key`. Signed keys use `POST /operation-keys`. D1-K uses a client UUID and omits key issuance. [UUID protocol](comparison-client-keys.md) |
+| Action observation | `GET /requests/{ref}/action-context?action=…` is the sole token source, under its action grant. Bind principal, target, action, revision, epoch and material facts. Use C1's body for Edit/Verify/Accept and name for Reject/Delete/Publish plus state and approved facts. Prefer C2's eligible-state gate and proposed 15 min window. Require fresh context for new existing-request writes. Exact replay uses the original bytes where applicable. Create carries no observation. Detail/result revisions are informational. |
+| Validation and results | Strict UTF-8 JSON and unique known fields. Nonblank and immutable name, preserve case and characters, reject NUL and unrepresentable input before persistence. Begin at 128 KiB request cap, name/body/reason 256/16,384/2,048 UTF-8 bytes and bounded opaque tokens (key 1,024, observation and cursor 2,048, ref 128). Use lossless Publish ID decimal string and C1 minimal authorized mutation result. Withhold protected fields and apply D1 fallback rules. |
+| Errors | C1 Problem Details. 400 malformed, 401 unauthenticated, 403 denied on disclosable targets, 404 concealed/absent, 409 stale/illegal/key cases, 413 size, 415 media, 429 admission and 503 unavailable or unresolved. Uncertainty retains intent/key. Fences expose no original result. Intrinsic `key_expired` is signed-key only. D1-K uses scope/marker proof and authorized conflict, ordinary concealment or uniform fencing. |
+| Browse and history | C1 `name,state,size,cursor`, size 10 by default and proposed cap 50 and 15 min continuation. C2 proposes cap 100. Exact name bytes and current state combine with AND after row/filter authorization. Reauthorize live keyset and lookahead through release, with descending immutable creation tuple and ref tie-breaker. No count. History uses `sequence,action,from,to` and separately scoped masks. |
+
+| Alternative | Trade-off and impact |
+| --- | --- |
+| D3-T · Unified transition endpoint | One explicitly typed transition command reduces route count and puts more branches in one validation contract. Preserve named action semantics in observations/permissions and rerun invalid-combination and compatibility fixtures. |
+| D3-E · Compact errors | Use C2's status/code/requestId shape plus separate pending and unknown outcomes. Gives precise recovery state, with a custom envelope and more client cases. Preserve uniform concealed old-key/expiry headers and body. |
+| D3-H · Smaller history item | Use C2's ordinal/from/to only. Reduces metadata and omits explicit action. Preserve committed order, null creation predecessor and stable masks. |
+| D3-D · Defer | Plan DTO, grant/error, multilingual and cursor fixtures. Keep public clients/generated contracts and compatibility baseline provisional. |
+
+**Verification impact.** Test type and input bounds, 64-bit wire round trips, stale and missing context, original authorized retries, denied headers/fields, hidden filter equivalence, deletion vs cursor, ordering across restore and default 10. D1/D2 choices govern the key protocol and grants. [C1 browse](../candidate-1/queries.md) · [C2 browse](../candidate-2/browse-history.md) · [C2 context](../candidate-2/observations.md) · [C1 E2–E4](../candidate-1/verification.md)

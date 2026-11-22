@@ -1,0 +1,7 @@
+# B04 independent review · Initial candidate
+
+**Changes required on 2026-11-22 (Europe/Warsaw).** GPT-6.2 Astra high (60) reviewed GPT-6.2 Sol xhigh (56). Base `bdfbc00ec21a39aec37354e9ab77ce552a75feee`, exact candidate `0c2f2e861d7e29ed7e250e61a9632b9a65230599`, tree `20ccb1311a12ad0e1a93d84a4a04cd2fcb92a1f3`. Initial evidence SHA-256 `d7ce8e99005e23a6b36291597c193bb2dfd399a88ff90046da9467eb1f9590e7`. [Original evidence](evidence-0c2f2e8.md) · [G1-Q scope](g1-q-approval.md)
+
+**Blocking build finding** The fixture’s standalone POM invoked Maven Dependency Plugin 3.10.0 without the adopted B01 plugin dependency override. The reviewer reproduced it loading BeanUtils 1.9.4. Reuse the adopted Maven plugin configuration, verify its active class realm and repeat the exact fixture checks. The resolved JDBC runtime classpath already matched `postgresql:42.7.14` and `checker-qual:3.55.1`. [B01 adopted build](../B01/g0-b-adoption.md) · [Independent realm and driver log](../../../tmp/phase5-development/b04-fixture/review-0c2f2e8/maven-realm-and-driver.log)
+
+The independent Windows fixture run passed its engine, role, lock, backup, restore, proof and teardown assertions. Separate cleanup confirmed all three loopback ports were free. The independent archive evidence manifest SHA-256 is `7de67c0ac3dc088397aeb116800bfd68e639f89ea88bf686003093a4842ca5ec`. [Independent evidence manifest](../../../tmp/phase5-development/b04-fixture/review-0c2f2e8/manifest.sha256)

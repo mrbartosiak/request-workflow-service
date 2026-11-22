@@ -1,0 +1,7 @@
+# G0-B owner approval · B01 Maven qualification
+
+**Approved 2026-11-22 (Europe/Warsaw).** The owner replied “Continue” in the Phase 5 coordinator chat directly after the request to approve the revised Maven G0-B scope. The coordinator interprets the reply as approval of the linked request, SHA-256 `74867614f322484cb43b5ab8c63d7bb9a38aa4ce069deaf348f10ef6c9f5f549`. [Exact request](g0-b-request.md) · [G0](../g0-kickoff.md)
+
+**Authority** `PH4-PLAN-r1`, manifest SHA-256 `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6`, base commit `98c5802c2efc512d14dabf0a6ab59bd567571754`. The approved qualification uses installed Maven 3.9.16, process-local toolchain settings and isolated Maven settings and cache. It permits acquiring and verifying the exact portable Temurin `25.0.5.1+2` archive in the request, resolving the proposed dependencies and necessary Maven plugins from Maven Central, and implementing and running the local B01 Maven build, MVC smoke and module checks. [Installed Maven evidence](maven-qualification.md) · [Independent review](maven-qualification-review.md)
+
+**Limits** No additional artifact mirror was named. Verified exact resolved pins and coverage of any material variance remain subject to their documented disposition before integration. The authorization covers the B01 qualification checkout, public artifact acquisition and local synthetic tests. Managed runners, source transfer, global tool configuration, PostgreSQL fixtures, release actions and other action gates retain their separate scopes.

@@ -1,0 +1,7 @@
+# G1-U owner approval · Use the PostgreSQL fixture
+
+**Approved 2026-11-22 (Europe/Warsaw).** The owner replied “Approved” directly to the G1-U request for local fixture use in B05–B08. The approved request SHA-256 is `defd48fd651b4aabb0b514bae34670ca2f8cb11031375f28bd48540f2fefb485`. Proceed through the approved wave as ticket prerequisites are satisfied. [Exact request](g1-u-request.md) · [G0](../g0-kickoff.md)
+
+**Authorized fixture** Integrated B04 `8f509e7fa2b538e9de99af2ca516c47a45d1d771`, tree `e8183816132e60e139ae16f41e43005de4027c45`, `PH4-PLAN-r1` SHA-256 `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6`. Use the qualified portable PostgreSQL 18.7, pgJDBC 42.7.14 and Checker Qual 3.55.1 with the exact hashes, isolated loopback endpoints, synthetic roles, backup and process teardown in the request. The disposition accepts the documented advisory coverage limits and shared Windows physical failure domain for local synthetic work. [Independent review](review.md) · [Integration](integration.md)
+
+**Scope** B05–B08 implementation and independent real-engine verification may provision new synthetic scratch clusters within this scope. Serialize fixture runs that share the designated ports, separate command and proof credentials and roles, and stop only the processes owned by each run. Preserve the plan’s separate approvals for later waves and production environments.

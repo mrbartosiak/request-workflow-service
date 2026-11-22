@@ -1,0 +1,22 @@
+# D6 · Evidence, operating gates and recovery
+
+**Governs** DEC-07/14, Q-01/05/06/07/10/13, R-03/07/09/10. The owner separately authorized a quick performance check. Production topology, RPO, tolerated data loss, named authorities and formal workload remain open. [Kickoff](../../owner-kickoff.md) · [HLD operations](../../../Phase2-HLD/operations-and-recovery.md)
+
+**D6-R recommendation.** Confirm the common smoke profile when a runnable Java 25/Spring 7.0.11 build exists. Use two service instances, shared real PostgreSQL for the proof environment, auth, disclosure, external authority/witness and logging in path. Preseed matching authorized keys, fresh action observations and independent targets. Pace 100 core requests/s, 10 s warm-up and 30 s measurement, 3,000 offers and 375 per core operation. Record scheduled-arrival end-to-end timings, all misses/timeouts and outcome classes, offered/completed counts, p50/p95/p99/max, within-500-ms count/share, instance split, resources and sampled durable checks. Label scope as prepared independent-target traffic. [C1 smoke](../candidate-1/performance.md) · [C2 smoke](../candidate-2/acceptance.md#quick-opt-in-smoke)
+
+The workspace lacks a runnable service/build, required local Java version and checked PostgreSQL/Docker tools. Application timing remains pending. A SQLite probe or plain Java loop measures its own workload and supplies no service performance evidence. Keep the separate formal acceptance workload and run approval open. Acceptance requires sustained 100 rps across at least two instances, every measured request strictly under 3 seconds, ≥95% within 500 ms per core operation and expected valid throughput, with misses/timeouts failing. Zero unauthorized reads/changes and verified restore within 60 minutes remain separate required outcomes. [Readiness](performance-readiness.md) · [HLD targets](../../../Phase2-HLD/acceptance-evidence.md#performance)
+
+| Proposed component | Recommendation and verification |
+| --- | --- |
+| Logs and admission | Protected bounded spool with safe allowlisted request/outbound/error metadata, reserved reject/completion capacity and no sensitive payloads. Start at 128 MiB per instance with C2's 60% alert and 80% restrict. Verify sink outage, saturation, sensitive-value exclusion and count completeness. Approve log access and loss handling. |
+| Advisory and quality gates | Weekly and release-time Spring Security/Snyk review. Block missing reviews and applicable unresolved critical/high exposed findings. Use C1's ≤10 complexity per agreed critical method and ≥90% critical branch coverage, plus real concurrency, release and migration cases. Approve exact monitored classes, risk exceptions, report ownership and deadline policy. |
+| Recovery rehearsal | Rehearse backup plus verified logs first. Physically exclude older writers and protected egress, verify current authority, ID/association, replay and payload proof, then stage protected reads, safe fresh effects and separately reconciled dispatch. Track missing acknowledged outcomes apart from uncertain/released outcomes. Compare warm failover before selecting production. |
+
+| Alternative | Trade-off and impact |
+| --- | --- |
+| D6-G · Alternate spool thresholds | Use C1's 70% alert and 85% restrict thresholds. This uses more buffer before intervention and leaves less reject/drain headroom. Fault-test before applying admission gates. |
+| D6-C · Alternate coverage floor | Use C2's 85% branch floor instead of 90%. Keep all must-pass critical functional cases and complexity limits. Verify both evidence dimensions before release. |
+| D6-W · Warm rehearsal first | Exercises promotion and physical fencing early, at additional setup/capacity cost. Requires proved commit continuity and split-brain controls. This selects rehearsal order only. |
+| D6-D · Defer | Keep profiles and qualification plans. Continue readiness checks and rehearsal design. Formal performance claims, production release criteria and verified recovery remain pending. |
+
+Approve rehearsal order and agreed settings now. Keep production topology, RPO/allowed loss, proof-store ownership, named authorization for pause/resume/reconciliation, formal load profile and full-run permission explicit and open under every option. Delegated recovery milestones may be tuned within the fixed 60-minute goal. Before Phase 4, identify planning tasks blocked on each deferral. [C1 operations](../candidate-1/operations.md) · [C2 operations](../candidate-2/operations.md) · [C2 recovery](../candidate-2/recovery.md)

@@ -1,0 +1,21 @@
+# Work graph and agent handoff
+
+**Proposed sequence** Apply the owner dispositions before their scoped work. Every card's `Needs` field names direct predecessors. A reviewed predecessor closes when its stop conditions have supporting evidence. Gates are external graph nodes. G3 plus later Phase 5 kickoff applies to every card. G7 or equivalent recorded G3 scope also applies to every M2/M3 card. The same Phase 5 revision and prerequisite contract apply even when tasks run in parallel. [Decision gates](decision-gates.md)
+
+| Milestone | Entry and parallel work | Exit and allowed claim |
+| --- | --- | --- |
+| M0 · Testable scaffold | `FND-00/01`, `DOM-01/02`, `HTTP-01`, `PG-01`. Trigger preflight after G3 and kickoff. Split domain, HTTP and fixture after build seams. G0 and G2a/G2b gate their respective setup. | Recorded toolchain and repeatable failing/passing tests. Pending fixture permits domain/contract checks. |
+| M1 · First runnable HTTP slice | `PG-02`–`PG-04`. Run key and ref/tuple work in parallel. Join guarded Create, receipt and Get in `PG-04`. | Independently boot, mint a synthetic key, Create, GET, replay and restart against the fixture. Early slice proves its exact local profile. |
+| M2 · Interview workflow | `PG-05`, `APP-01`–`APP-05`, `PRF-01/02/03`, `INT-01`, `OPS-01`, `DEL-01/02`. Parallelize context, browse, independent proof, append and logging after seams. Join actions, reads and Publish at the real routes. | `DEL-01` rehearses the complete shared workflow. Fixture policy and evidence gaps are visible. G6 separately gates `DEL-02` external publication. |
+| M3 · Verification | `APP-06/07`, `PRF-04/05`, `INT-02`–`INT-06`, `OPS-02`–`OPS-05`, `REC-01`–`REC-04`, `PERF-01`. Parallelize connector, restore harness and quality work as direct prerequisites clear. Run the exact quick check once ready. | Collect E/P/proof/restore coverage and measured quick scope. Rehearsal precedes production disposition. |
+| M4 · Target qualification | `PROD-01`–`PROD-07`, `PERF-02/03`. Obtain scoped DFR dispositions, qualify production artifacts, then apply G4 and G5 to the formal run. | `PROD-06` assembles a signed release recommendation for supported claims. G8 owns deployment and live activation. |
+
+**Assign** One agent owns one card per context. Include stable ID, approved plan/LLD digest, exact links and source rows, fixture/gate records, predecessor commit/evidence refs, target files and excluded work. Use isolated branches or worktrees once authorized. Coordinator owns contract seams and integration order. Separate executor and reviewer roles. [Source plan](plan-ai-clarity.md) · [Phase 6 changes](change-control.md)
+
+**Red** Write the smallest behavior test first. Record stable test ID, command and expected observed failure. A harness/setup failure keeps the card blocked. Preserve injectable clocks, controlled barriers and fixture controls in test code. Report inconclusive timing when a race order cannot be proved.
+
+**Green** Implement the narrow required behavior using existing parts and capture clean scoped tests. Re-run affected predecessor tests and refactor. Record commands, result codes, test/report paths and sanitized authoritative evidence. Audit logs, data and secrets before retaining output. [Evidence](environment-and-evidence.md)
+
+**Review** Give a separate reviewer the diff, intended assertions, failure/pass proof, compatibility and security delta, and next eligible cards. Reviewer verifies the exact revision and assigns fixes directly to its author. Review overlap at a seam before merge, then re-run both sides' impacted checks on the merged revision. The coordinator updates the graph status after signoff. Owner approves changes at material scope, deployment, live role/data or workload boundaries.
+
+**Stop** Bound a card to the listed green surface and pass evidence. A blocked dependency leaves its descendants blocked. Log concrete symptoms, retry safe recoveries within scope and pick an independent ready card. Escalate divergent behavior, changed wire contract, production adoption or required approval as decision records. The next agent starts from the reviewed contract and proof bundle. [Failure response](failure-response.md)

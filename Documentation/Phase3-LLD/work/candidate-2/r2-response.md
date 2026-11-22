@@ -1,0 +1,11 @@
+# C2-LLD-r2 response to independent review
+
+**Status** Executor changes for dedicated re-review. The governing baseline remains HLD-owner-r3 and the Phase 3 identifier refinement. [R1 review](../reviews/candidate-2-r1-review.md) · [Exact r2 manifest](review-manifest.md)
+
+| Finding | Design correction | Planned check |
+| --- | --- | --- |
+| R2-1 Publication identity | The independent journal binds ref/namespace/ID before local publication. Durable local witnesses distinguish committed effects from burns, and unresolved refs stay fenced after recovery. External mapping requires a previously committed Create reference. | Restore ACCEPTED A after Publish 818 with response lost and no mapping. Recover the original effect or fence A. Verify known rollback burns ID without creating an association and rolled-back Create refs never escape. [Publication](publication-reconciliation.md) · [Identifiers](identifiers.md) · [Checks](restore-evidence.md) |
+| R2-2 Current authority | An outside contiguous scope journal and matching commit witnesses cover grants, mappings, assignments, retention impacts and security-relevant facts. Open each scope with verified current proof, including externally sourced facts. Apply the gate through dispatch. | Commit revocation and reassignment beyond the backup and test all protected surfaces with and without complete proof. Verify zero formerly authorized effects or sends. [Authority](authority-recovery.md) · [Checks](restore-evidence.md) |
+| R2-3 Retry disclosure | Submitted authorization precedes key decisions. Expiry uses verified envelope only. Old-generation inaccessible/absent/untrusted bindings converge on KEY_FENCED while trusted currently permitted exact replay is available. Apply the same precedence at final release. | Compare normalized status, body and headers for absent, inaccessible, purged and expired receipts. Test exact replay, changed intent and release-time revocation/expiry. [Retry precedence](retries.md) · [Checks](restore-evidence.md) |
+
+The independent proof stores, commit-evidence mechanism, release/recovery policy and latency cost remain proposals governed by the owner gates. Runtime evidence remains planned. [Outstanding decisions](proposals.md)

@@ -1,0 +1,5 @@
+# G0-B owner approval · Wave 2 local runtime reuse
+
+The owner's 2026-11-22 approval of [Wave 2](g0-wave2-request.md), SHA-256 `4cbbff002f290bd22dd079cddbab2482865fba04eeee8458d03c5ae3527cb079`, extends use of the adopted Maven 3.9.16, Temurin 25.0.5.1+2, Spring 7.0.11 and qualified cached build inputs within B09–B12, B32 and B41. On real HTTP checks reuse the opt-in `synthetic-http` bootstrap with exact verified embedded Tomcat and annotations artifacts at 11.0.29 and the documented advisory coverage. [Adopted build](B01/g0-b-adoption.md) · [Runtime input hashes](B08/http-runtime-inputs.md) · [Prior runtime approval](B08/g0-b-http-runtime-approval.md)
+
+Each authorized application JVM uses one HTTP-only IPv4 loopback connector, synthetic credentials and data. B32 may start two such JVMs on separate ephemeral ports. TLS and clustering are excluded. Fault controls stay on the fixture classpath. Separate action gates govern new dependency acquisition, topology and production use. [G0 extension](g0-wave2-approval.md)

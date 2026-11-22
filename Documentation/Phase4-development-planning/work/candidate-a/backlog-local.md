@@ -1,0 +1,21 @@
+# Phase 5 backlog · PostgreSQL fixture and Create
+
+## PG-01 Two processes, reset and command transaction primitive
+
+**Needs** `FND-01`, G2a and G2b. **Scope** Disposable PostgreSQL 18 migration/bootstrap, separate pools, guard/key schema and transaction runner. **Red** Test shared committed state with separate process pools, rollback after partial row writes, guard lock incompatibility and bounded timeout by forced order. **Green** Implement fixture migrations and explicit JDBC `READ COMMITTED` Spring-bound command connection, shared release guard and latch probe. **Stop/handoff** Record pinned fixture identity, fresh reset, driver/loopback, rollback and two-process barrier evidence. Review resolved driver/transitive additions against Spring/Snyk before acceptance and date the findings. [Records and PostgreSQL isolation](../../../Phase3-LLD/persistence.md) · [Connection ownership](../../../Phase3-LLD/wiring.md)
+
+## PG-02 Key issuance, digest and arbitration
+
+**Needs** `PG-01`, `DOM-02`. **Scope** Signed key issuer, fixture custody, versioned intent digest, receipt identity and arbitration port. **Red** Test exact decoded byte equivalence despite JSON order, mismatched route/scope/input/token, expiry before lookup, key-before-guard order and old generation read-only resolution. **Green** Implement bounded unique row claim/re-read and signed, purpose-specific keys and confirmation checks. **Stop/handoff** Supply cutoff and contention fixtures and current vs earlier generation scenario matrix. [Key protocol and outcome rows](../../../Phase3-LLD/retries.md) · [OperationReceipt](../../../Phase3-LLD/persistence.md)
+
+## PG-03 Create reference, order and generation
+
+**Needs** `PG-01`, `DOM-02`. **Scope** Synthetic `IdentityAuthority` fixture outside workflow restore/reset domain, independent generation and immutable reservations. **Red** Force random collision, old-generation claim, rollback and reset. Assert no reuse, refs have 192 random bits encoded as 32 base64url characters, ordinals resume by new epoch, overflow closes, and a provisional ref stays private. **Green** Implement reservation port and development fixture. Persist Create tuple in approved record shapes. **Stop/handoff** Keep fixture sequence/rollback evidence and expose certificate seam to recovery and queries. [Create authority and ordering](../../../Phase3-LLD/identifiers.md) · [Create scope binding](../../../Phase3-LLD/authority-continuity.md)
+
+## PG-04 Protected Create, replay and Get thin slice
+
+**Needs** `PG-02`, `PG-03`, `DOM-01`, `HTTP-01`. **Scope** `/operation-keys`, Create and minimal authorized Get with command/release separation. **Red** Assert replay/restart keeps 201/ref/Location and one atomic request/body/fact/receipt. A fresh key with identical inputs gets another ref. Withhold scope/epoch proof before command and release, or fail release preparation after commit. Assert no protected handoff and no duplicate commit. **Green** Join actual routes and bind scope readiness to an independently seeded synthetic checkpoint, active certificate and guarded policy version. Reserve before Create and show origin only after commit. Record `ReleasePrepared` independently, then hand off under a fresh shared guard. **Stop/handoff** Record runnable commands, masks and row counts. Feed this seam to `PRF-03` and `PRF-04` for full journal/release integration and regression. [Create routes](../../../Phase3-LLD/rest.md) · [P1](../../../Phase3-LLD/postgres-evidence.md) · [Release evidence](../../../Phase3-LLD/witness-records.md)
+
+## PG-05 Create arbitration and restart evidence
+
+**Needs** `PG-04`. **Scope** PostgreSQL P1/P2/P3/P4/P5 Create variants. **Red** Baseline oracle rejects double effects, false conflict hints, new effect on unproved absence and timeout inferred as abort. **Green** Force key waits, timeout, altered valid intent, inaccessible original, proven rollback, lost response/commit, untrusted resolution, restart, expiry and receipt cleanup. Fix only Create arbitration and classification defects. **Stop/handoff** Attach both processes' HTTP/DB/lock proof, barrier controls and one durable creation per accepted intent. Feed vendor/Publish variants to later work. [P1–P5, Create effects](../../../Phase3-LLD/postgres-evidence.md) · [Budget and expiry](../../../Phase3-LLD/retries.md)

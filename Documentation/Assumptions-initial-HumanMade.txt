@@ -1,0 +1,54 @@
+Assumptions:
+
+I. We will create a company internal request system that could serve as backend for HR ticketing system, bug reporting and handling accross organization and other aproval-dependent inner company request workflows.
+Assumptions, HLD and LLD will be created in two versions - one for AI which optimizes clarity for AI reader, second human readable which maximizes clarity for the human reader.
+
+II. We will deliver this in phases:
+- phase one - conceptual - all the features and quality acceptance criteria found and descripte in separate .md files. Define domain entities at the conceptual level and relations between them. Maximize Long term maintainability and extensibility. Keep Domain fragmented (small entities).
+- phase two - desining - create a High Level Design document in .md format in its own folder. Make the main HLD document contain links to subdocuments within repository id est specific sub documents can be injected into it at any moment to create a full document. Each of the documents should be relatively short (preferably less than 5000 characters but this limit can be breached if justified)
+- phase three - desining part 2 - create a Low Level Design document in .md format in its own folder. Make the main LLD document contain links to subdocuments within repository id est specific sub documents can be injected into it at any moment to create a full document. Each of the documents should be relatively short (preferably less than 5000 characters but this limit can be breached if justified).
+- phase four - development planning - create a detailed granulated plan for application development. 
+- phase five - development - it should be Test Driven Development 
+- phase six - iterative improvement loop ( review -> justified changes required -> conceptual documents edits (if required) -> Design documents edits (if required) -> Planning edits (create a new version entry in the planning documents) -> development (keep the version infromation in the commits but don't version endpoints)
+
+III. Conceptual 
+1. Assume you'll write the application in Java 25 using Spring framework 7.0.11.
+2. Assume there will be many new requirements after our system is on production - we need to design it in a way that's resistant to change.
+3. Assume a big load (treat 100 requests per second as a mesurable capacity requirement) and multiple instances of this application will be ran simultanously so you need to assure idempotency at the database level.
+4. Assume the application will run in a corporate environment that uses workday, atlasian Jira, shiftleft, sonarqube, sonatype and other popular enterprise utility software. We need to assess the business value of each integration and make the ease of integration one of acceptance criteria - it would be best to create base interfaces with implementation classes that would be could be later extended to satisfy specific needs of each integration/business usecase/application but the core fuctionality and lifecycle will be defined in those base classes.
+5. List the types of real production issues of similar applications. Make this application resistant to those issues.
+6. optimize for support of various usecases - consider whether it would be good to create the base functionality as a dependecy to specific implementations supporting specific business cases.
+7. assume user types, roles and user groups exist withing organization e.g. there are approver roles or groups of users that can approve certin requests. 
+8. Ask me for approval if you are to make ANY important decision
+
+
+IV. HLD Planning 
+1. idempotency, concurrency control, and reliable integration delivery
+2. clarity and maintainability are priorities.
+3. Ask me for approval if you are to make ANY important decision
+
+
+V. LLD Planning 
+1. prefer using existing Spring configuration and classess unless a dependency has justified advantages (state those advantages in AI LLD)
+2. judge whether the following options match our goals:
+  A. Generating dtos from yaml files
+  B. Generating DTO mappers at compile time
+  C. Catchich breaking API changes in CI	
+  D. Generating types from database schema
+  F. Generating event payloads from schemas	
+  H. Enforcing package boundaries with tests
+  F. Make retries safe and test them against PostgreSQL
+3. Ask me for approval if you are to make ANY important decision
+
+VI. Development planning
+1. Ask me for approval if you are to make ANY important decision
+
+
+important quality measures:
+- security handling - follow Spring Security Advisories https://www.google.com/goto?url=CAESVwHEIkXX09d4tmaAdkFjJfVnizibDzCZ5ZFv1iuFCTqimQum_q8vKZKDP_1n29M5RAF-TbaVtLSOA2AG2JwsQXBuXeErULX1DALS0wJzJVOxklvtpTXgwg and Snyk Vulnerability Database (https://www.google.com/goto?url=CAESYAHEIkXXPiJDD1pdnZTtAVbKQ3CTBZ0Wb2jZdkg7urIy_hcAyUoELhGJCkRcXcxqPkyxy1sbmLJXe5BkbztYjHtwGDYkVSryqEYTEk5YWd9nnVw1atMAErdE5QUfLgMLuA)
+- under 3 seconds performance for every request (but preferably much less for most requests)
+- keep cyclomatic complexity reliably low
+- log every error in a descriptive and understandable way 
+- log every incomming/outgoing requests 
+- validate requests well and early (if database does not accept certain characters don't they should be validated in controller)
+- other that would come up later

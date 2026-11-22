@@ -1,0 +1,12 @@
+# G0-B decision request · B08 local HTTP runtime
+
+**Pending owner disposition.** B08 requires real HTTP Create and replay after process restart. The adopted B01 build uses the Jakarta Servlet API for in-process smoke tests and deferred servlet runtime adoption. Approve the two exact Maven Central artifacts below for the B08 local synthetic application and its independent review. The proposed scope includes acquisition, strict checksum verification, build use, and local runtime use after the expected closure and connector restrictions have been verified. [B08 criteria](../../../Phase4-development-planning/first-slice.md#b08--first-runnable-durable-create-with-exact-retry) · [Accepted wiring](../../../Phase3-LLD/wiring.md) · [B01 adoption](../B01/g0-b-adoption.md) · [Action gates](../../../Phase4-development-planning/choices.md#later-authorizations)
+
+| Role | Exact Maven coordinate |
+| --- | --- |
+| Embedded Servlet 6.1 runtime | `org.apache.tomcat.embed:tomcat-embed-core:11.0.29` |
+| Expected runtime dependency | `org.apache.tomcat:tomcat-annotations-api:11.0.29` |
+
+Apache lists 11.0.29 as the released Tomcat 11 version for Servlet 6.1 and Java 17 or later. Spring Framework 7 targets Servlet 6.1, and the project uses the adopted Java 25 and Spring 7.0.11. The upstream core POM template declares the same-version annotations API. Confirm the exact published POM, resolved graph, input hashes, startup and normal MVC request handling in the B08 candidate. [Tomcat version matrix](https://tomcat.apache.org/whichversion) · [Tomcat core POM template](https://github.com/apache/tomcat/blob/main/res/maven/tomcat-embed-core.pom) · [Spring 7 baseline](https://spring.io/blog/2025/11/13/spring-framework-7-0-general-availability/)
+
+The dated 2026-11-22 review found Apache’s CVE-2026-133325 advisory for Tomcat 11.0.29 with TLS 1.3 and TLS-PSK clustering. The B08 scope uses a single loopback-only HTTP connector, synthetic credentials and data, and no cluster configuration or TLS-PSK. Require the reviewer to verify those conditions and keep production runtime use separately gated. The exact public Snyk versions could not be retrieved. Recheck publisher, Spring and public Snyk findings against the resolved pair, and keep material version changes, new dependencies or additional exposure pending. [Apache advisory](https://tomcat.apache.org/security-11.html) · [Spring advisories](https://spring.io/security/) · [Snyk index](https://security.snyk.io/package/maven/org.apache.tomcat%3Atomcat)

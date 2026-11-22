@@ -1,0 +1,7 @@
+# B04 integration and fixture handoff
+
+On 2026-11-22 (Europe/Warsaw), the coordinator fast-forwarded local `master` from `bdfbc00ec21a39aec37354e9ab77ce552a75feee` to independently accepted `8f509e7fa2b538e9de99af2ca516c47a45d1d771` under G1-Q. The integrated tree is `e8183816132e60e139ae16f41e43005de4027c45`. The three fixture files matched the reviewed checkout byte for byte. [G1-Q authorization](g1-q-approval.md) · [Independent review](review.md)
+
+The integrated Maven offline `clean verify` passed all 286 tests across 11 reactor projects. The integration log SHA-256 is `2a3d62b73df464085b21811e9bf1dc36487f66b1af695e94927c4f734d64edcf`. Independent real-engine evidence came from a fresh archive of this same integration commit and verified workflow restore, proof durability and process teardown. [Integration log](../../../tmp/phase5-development/b04-fixture/logs/b04-integrated-offline-verify.log) · [Fixture reproduction](../../../fixtures/postgresql/README.md) · [Decisive evidence](evidence.md#decisive-run-and-observations)
+
+B05 receives the workflow connection, migration and runtime separation, read-only observer and native fixture backup and restore contract. B32 receives the exact binary and environment inventory, the independent proof connection and the bounded two-session lock verification. Gates still apply to the eligible use of those handoffs. [Successor contract](evidence.md#successor-handoff) · [G1-U fixture-use request](g1-u-request.md)

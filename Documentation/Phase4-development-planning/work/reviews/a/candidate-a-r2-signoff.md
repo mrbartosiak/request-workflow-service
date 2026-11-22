@@ -1,0 +1,18 @@
+# Candidate A · independent review signoff
+
+**PASS for owner comparison.** Reviewer A (GPT-6.2 Astra, xhigh) signs the exact 21-payload planning candidate `PH4-A-r2`, by Executor A (GPT-6.2 Sol, xhigh), on 2026-11-22, Europe/Warsaw. Its manifest SHA-256 is `f0ceb278cf818090aa2ea81773fc397bcf3e1a7f0e7c3357ee7e7a8597a718bd`. The signature covers the index and all Markdown payloads named by the manifest. Any edit requires validation against a new manifest. [Candidate index](../../candidate-a/plan-ai-clarity.md) · [Exact manifest](../../candidate-a/manifest.sha256)
+
+**Independent checks.** Recomputed the 21 payload hashes and matched the manifest to the complete Markdown inventory, ordinal filenames and exact byte encoding. Resolved all 165 local links and heading anchors. Verified 49 distinct cards across five milestones, each assigned once. All prerequisite references resolve, the graph is acyclic, and each predecessor belongs to the same or an earlier milestone. The largest payload contains 4,630 characters after newline normalization. Confirmed the Phase 3 handoff manifest `51de59f997e5902ed58e13ee50efdcc49be0f2afad6fac561b9fb99659a6de81` and all 30 accepted source hashes. [Accepted Phase 3 handoff](../../../../Phase3-LLD/phase-4-handoff-acceptance.md)
+
+| Findings | Verified resolution |
+| --- | --- |
+| A1–A3 | Read-only preflight precedes owner pin/provision approvals and later setup verification. G3 and G7 scope the local milestones; qualified production/tenant access and promotion have separate dispositions. Each of seven accepted deferrals identifies its owner gate and dependent work. |
+| A4–A5 | The first protected Create/Get slice uses independent current-scope and release evidence and suppresses handoff on missing proof. Full scope-journal and combined confirmation regressions follow. APP-07 owns valid cross-route key conflict and concealed-original tests. |
+| A6–A8 | Verify precedes the real Verify/Delete race. Every card has a milestone. PRF-04 joins real protected readers and worker proofs. T3/T6 run at pull request and release. Purge rewind, old tokens and old claims have downstream evidence owners. |
+| A9 | APP-02 now requires PRF-03. Eligible changes to access or masks prepare a scope delta, commit its witness with the effect, and prove original-lineage confirmation before protected release. The red case withholds confirmation. |
+| A10 | FND-00/01 and PG-01 distinguish proposed and resolved dependency advisory checks. DEL-01/02 require current scope-labeled coverage and dated release evidence. T3 combines optional early seeded spec preparation with APP-07 real behavior checks. |
+| A11 | PROD-02 requires the complete P1–P9 and targeted restore/cut matrix on the chosen engine, driver and independent topology, including native backup, failover and upgrade. PROD-06 blocks an incomplete or mismatched release recommendation. |
+
+Reviewer A assigned each correction directly to Executor A and verified the author's revised files. All eleven findings are closed. [Opening review](candidate-a-tranche-1-findings.md) · [Workflow review](candidate-a-tranche-2-findings.md) · [Complete r1 review](candidate-a-r1-findings.md)
+
+**Decision boundary.** This signoff qualifies the proposal for comparison and owner decision. Phase 4 acceptance, Phase 5 kickoff, exact dependency and fixture approvals, production and tenant selections, external publication and formal profile/run decisions remain with the owner. The previously authorized quick smoke awaits its specified runnable fixture. Application, PostgreSQL, conformance, restore, and capacity results remain planned.

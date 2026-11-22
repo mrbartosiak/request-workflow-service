@@ -1,0 +1,60 @@
+I. Purpose and documentation
+
+Build an internal request management system that can serve as the backend for HR ticketing, organization-wide bug reporting and handling, and other internal workflows that require approvals.
+
+Write two versions of the assumptions, the high-level design (HLD), and the low-level design (LLD). Optimize one version for AI readers and the other for human readers.
+
+II. Delivery phases
+
+1. Conceptual work. Identify the features and quality acceptance criteria and document them in separate Markdown files. Define the domain entities and their relationships at a conceptual level. Keep entities small and prioritize long-term maintainability and extensibility.
+2. High-level design. Place the Markdown HLD in a dedicated directory. Link from the main HLD to supporting documents in the repository so their contents can be brought into the main document whenever a complete version is needed. Aim to keep each document under 5,000 characters. Exceed that length when justified.
+3. Low-level design. Place the Markdown LLD in its own directory. Link from the main LLD to supporting documents in the repository so their contents can be brought into the main document whenever a complete version is needed. Aim to keep each document under 5,000 characters. Exceed that length when justified.
+4. Development planning. Produce a detailed implementation plan broken down into small steps.
+5. Development. Follow test-driven development.
+6. Iterative improvement. Review the work and identify justified changes. Update the conceptual documents and then the design documents where needed. Record planning changes in a new version entry in the planning documents, then implement the changes. Record version information in commits and keep endpoints unversioned.
+
+III. Conceptual assumptions
+
+1. Use Java 25 with Spring Framework 7.0.11.
+2. Expect many new requirements after the system enters production. Design it to accommodate those changes.
+3. Expect high load and multiple application instances running concurrently. Set a measurable capacity requirement of 100 requests per second and enforce idempotency at the database level.
+4. Expect a corporate environment that uses Workday, Atlassian Jira, ShiftLeft, SonarQube, Sonatype, and other widely used enterprise tools. Assess the business value of each integration and include ease of integration in the acceptance criteria. Prefer base interfaces with extensible implementation classes that can support the needs of each integration, business use case, or application. Define the shared behavior and lifecycle in the base classes.
+5. List the kinds of problems that occur in production in similar applications and design the system to withstand them.
+6. Design for varied use cases. Evaluate whether the shared functionality should be packaged as a dependency for implementations that serve specific business cases.
+7. Assume the organization has user types, roles, and groups, including roles or groups authorized to approve certain requests.
+8. Obtain my approval before making any important conceptual decision.
+
+IV. High-level design priorities
+
+1. Address idempotency, concurrency control, and reliable delivery to integrations.
+2. Prioritize clarity and maintainability.
+3. Obtain my approval before making any important high-level design decision.
+
+V. Low-level design priorities
+
+1. Prefer Spring's existing configuration and classes. Use an additional dependency when it offers a justified advantage and document that advantage in the AI-oriented LLD.
+2. Assess how well each of the following practices serves the project's goals.
+   - Generate DTOs from YAML files.
+   - Generate DTO mappers at compile time.
+   - Detect breaking API changes in CI.
+   - Generate types from the database schema.
+   - Generate event payloads from schemas.
+   - Test that package boundaries are enforced.
+   - Make retries safe and test them against PostgreSQL.
+3. Obtain my approval before making any important low-level design decision.
+
+VI. Development planning approval
+
+Obtain my approval before making any important development planning decision.
+
+Quality measures
+
+- Follow Spring Security Advisories and the Snyk Vulnerability Database for security handling.
+  Spring Security Advisories — https://www.google.com/goto?url=CAESVwHEIkXX09d4tmaAdkFjJfVnizibDzCZ5ZFv1iuFCTqimQum_q8vKZKDP_1n29M5RAF-TbaVtLSOA2AG2JwsQXBuXeErULX1DALS0wJzJVOxklvtpTXgwg
+  Snyk Vulnerability Database — https://www.google.com/goto?url=CAESYAHEIkXXPiJDD1pdnZTtAVbKQ3CTBZ0Wb2jZdkg7urIy_hcAyUoELhGJCkRcXcxqPkyxy1sbmLJXe5BkbztYjHtwGDYkVSryqEYTEk5YWd9nnVw1atMAErdE5QUfLgMLuA
+- Complete every request in under three seconds, with most requests preferably finishing well below that limit.
+- Keep cyclomatic complexity consistently low.
+- Log every error with a clear description.
+- Log every incoming and outgoing request.
+- Validate requests thoroughly and early. Check in the controller for characters the database rejects.
+- Add further quality measures as they emerge.

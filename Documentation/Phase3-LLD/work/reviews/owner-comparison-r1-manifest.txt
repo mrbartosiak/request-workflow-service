@@ -1,0 +1,29 @@
+# Owner comparison review manifest
+
+**Revision** PH3-OC-r1 · 2026-11-22 Europe/Warsaw. **Executor** Executor 1, GPT-6.2 Sol xhigh. **Dedicated reviewer** Reviewer 1, GPT-6.2 Astra xhigh. **Disposition** Submitted for exact revision signoff before owner presentation. [Comparison index](comparison.md) · [Review process](../../review-and-signoff.md)
+
+**Changed files** Initial comparison. Eight new Markdown payload files are listed below, plus this manifest. SHA-256 digests are for the exact on-disk bytes. The manifest's own SHA-256 is supplied in the review handoff.
+
+| Pinned source | SHA-256 |
+| --- | --- |
+| [Candidate 1 PH3-C1-r2 manifest](../candidate-1/manifest.md) | `b86b886e2416cb05f080b379d87beaf2765aab0f395b4b72de20afb99588ab8e` |
+| [Candidate 1 signoff](candidate-1-r2-signoff.md) | `c7ff917f881f2360845df22ccffe2650ab8df0d6da1a878725406efeabc2ad8a` |
+| [Candidate 2 C2-LLD-r2 manifest](../candidate-2/review-manifest.md) | `2e018ef51ca778bd7109988e65d0dcdac3df2fbb3d4a82cf3f3d63c955845441` |
+| [Candidate 2 signoff](candidate-2-r2-signoff.md) | `4beca5b091476ef28e98994bd6f5b7dc096e93d7f81a7b4835876ab9df184fd9` |
+| [Shared baseline, including HLD and Phase 3 owner record](source-baseline.sha256) | `6844b41abdb9249ffbe29a80de35936fac821b53fcc1c819b7e8dc2100cd70f2` |
+| [Quick check readiness](performance-readiness.md) | `680cda64d39888654552ea9241ebf4a73369163c5aaf29755c254dae3ddcf1a6` |
+
+**Verification** Recomputed 48 signed candidate payload hashes and 37 shared-source digests. Checked local links/anchors, inventory, module size, all six approval group and six tooling choices, and comparisons against the exact candidate designs. Application and PostgreSQL evidence remain planned. [Readiness](performance-readiness.md) · [Scope and assumptions](comparison.md)
+
+**Outstanding decisions** D1–D6 and T1–T6 remain proposals. Production engine, live scope, proof-store topology, RPO and named authority stay deferred by default. The owner must record explicit choices and separate Phase 4 handoff. [Approval gates](../../owner-approvals.md)
+
+```text
+85fef6b844988c324d841a1c442071e6e108e854ed8642831c559561b53f57ea  comparison-access.md
+698e3dd47244fc0d85429cd72b4d65a5dfda2c611e31154e8a4daa9f9d123e9a  comparison-consistency.md
+3a2e5eb4c53b3c1384123438d6251cceddc09761390d3e0b6f21d6960e6dac04  comparison-delivery.md
+63528c0d7602dcdf76367d4f8a8bd2e3bbf4dd5b72209c54e9f1ffa625b8dc81  comparison-identifiers.md
+bb5ac902a740d06442b53e37f2afa51f88e8d1053b7bdf2e0e4fe3ae3b1c1eda  comparison-operations.md
+9f7229870c50d5a311f72587b586b74239f653bab5cbe2cf8ceefd87e8f8b21e  comparison-tooling.md
+a701079e20ad8482a22d708a79e68085ba74ae3fdbd5b617954aa87605c21d9e  comparison-wire.md
+ab5d833159a44ee2ac8505b93f7275dca9fa2ffc45f015f08a9916dca5d5cc85  comparison.md
+```

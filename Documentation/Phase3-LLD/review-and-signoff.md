@@ -1,0 +1,16 @@
+# Phase 3 review and signoff
+
+Each executor deliverable needs a disposition from the dedicated GPT-6.2 Astra reviewer at `xhigh`, including partial deliverables used downstream, decision briefs, comparison, index, diagrams, traceability, merged content, and each changed revision. [Agent assignments](phase-3-execution-plan.md#team-and-assignments)
+
+## Candidate and decision review
+
+1. Give the reviewer the shared brief, approved source baseline, owner decisions, artifact paths, and an exact file manifest. Use a revision identifier and SHA-256 file hashes so the reviewer can identify the reviewed bytes. List changed files and outstanding decisions. [Executor brief](executor-brief.md) · [Phase 2 review precedent](../Phase1-conceptual/phase-2-hld-execution-plan.md#review-and-revision)
+2. Review source fidelity, requirement coverage, correctness of invariants, API/access behavior, transaction boundaries and race outcomes, testability, dependency rationale, and decision status. Check that modules are independently usable, links and anchors resolve, and terminology and scenarios agree. Check specifically for unauthorized disclosure through retries or browse, duplicate effects after uncertainty, and stale observations or identifier reuse after restore. [HLD traceability](../Phase2-HLD/traceability.md) · [HLD evidence](../Phase2-HLD/acceptance-evidence.md)
+3. The reviewer sends each improvement directly to the responsible executor, with the affected file/section, governing requirement or rationale, requested correction, and an observable completion check. The executor returns the revised manifest, changes, and a response to each finding. The reviewer rechecks the new revision and records disposition. Continue until the reviewer signs off or identifies a decision for the owner. The coordinator records those decisions for approval.
+4. After both candidate signoffs, Executor 1 compares material differences, alternatives, trade-offs, source citations, affected decisions and recommended choices. Reviewer 1 reviews the exact comparison revision before it goes to the owner. Follow the same review loop for corrections. [Approval gates](owner-approvals.md)
+
+## Final package
+
+Executor 1 assembles the package and records its source baseline, approved decisions, unresolved dependencies and requirement-to-evidence mapping. Reviewer 1 checks every final file and Reviewer 2 checks coherence across modules, including common field and type definitions, API-to-storage mappings, transaction and disclosure timing, recovery and integration fences, and matching verification scenarios. Reviewers direct assembly findings to Executor 1. After any revision, Reviewer 1 rechecks changed artifacts and Reviewer 2 rechecks affected interfaces and guarantees. Both sign the final manifest after corrections.
+
+Record executor, reviewer, artifact path, revision/hash, finding dispositions, and reviewer signoff under `Phase3-LLD/work/reviews/`. The coordinator checks that all final hashes match both package signoffs, the index and trace links resolve, and the owner record supports every adopted material choice before requesting the Phase 4 handoff. [Owner approvals](owner-approvals.md#phase-4-handoff)

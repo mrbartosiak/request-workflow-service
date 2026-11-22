@@ -1,0 +1,9 @@
+# B05 execution assignment · Local records and command transaction
+
+**Base** `8f509e7fa2b538e9de99af2ca516c47a45d1d771` on `codex/b05-jdbc`. `PH4-PLAN-r1` SHA-256 `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6`. GPT-6.2 Sol xhigh (56), independent GPT-6.2 Astra high (60). [G0](../g0-kickoff.md) · [G1-U](../B04/g1-u-approval.md) · [B04 fixture handoff](../B04/integration.md)
+
+**Ownership** `application/` for the B05 storage and transaction ports, `adapter-jdbc/` for the migration and JDBC implementation, and the smallest shared PostgreSQL fixture helper change if needed to reuse the qualified launcher. Keep the root Maven graph, other adapters and bootstrap configuration stable. Use the existing approved PostgreSQL, JDBC, Spring and JUnit versions and new scratch data with the G1-U role and loopback limits.
+
+**Oracle** Migrate empty and preceding fixture schema versions. Observe catalog constraints, exact UTF-8, scoped references, receipt uniqueness, positive and consistent counters and the publication pair. Run successful and faulted writes through the command transaction entry point and demonstrate the actual JDBC backend or transaction identity shared across participating writes. Compare authoritative row counts before commit and after forced rollback. [B05](../../../Phase4-development-planning/first-slice.md#b05--local-records-and-transaction-connection) · [Persistence](../../../Phase3-LLD/persistence.md) · [Wiring](../../../Phase3-LLD/wiring.md)
+
+**Return** An exact local candidate plus `Phase5-development/work/B05/evidence.md` with before and after observations, reproduced commands, applicable P checks and log hashes. Hand off the migration ownership, schema, command connection and outgoing storage interfaces for B06, B08, B09, B16 and B22. Preserve clean fixture teardown and the independent proof boundary.

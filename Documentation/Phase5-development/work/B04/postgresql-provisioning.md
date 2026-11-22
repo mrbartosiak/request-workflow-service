@@ -1,0 +1,7 @@
+# B04 portable PostgreSQL provisioning
+
+**Verified on 2026-11-22 (Europe/Warsaw).** The approved EnterpriseDB Windows x64 archive `postgresql-18.7-1-windows-x64-binaries.zip` was acquired from its publisher. Its 389,515,503 bytes matched the EDB sidecar SHA-256 `ead0bbc27fb678fa24dcf86b738981323042abd073c744103bf7f3aed23f9a33` before extraction. The restricted shell could not resolve `get.enterprisedb.com`. The scoped sandbox approval for the same public download and workspace extraction succeeded. [G1-Q authorization](g1-q-approval.md) · [Publisher checksum and code signing](https://github.com/EnterpriseDB/edb-installers/issues/802) · [PostgreSQL 18.7 release](https://www.postgresql.org/docs/release/18.7/)
+
+The archive and checksum sidecar are in `tmp/phase5-development/b04-fixture/downloads/`. The portable binaries are in `tmp/phase5-development/b04-fixture/runtime/pgsql/bin/`. Windows reported valid `EnterpriseDB Corporation` Authenticode signatures for `postgres`, `initdb`, `pg_ctl`, `psql`, `pg_isready`, `pg_dump`, `pg_restore`, `pg_basebackup`, `pg_verifybackup`, `pg_waldump`, and `pg_controldata`. Each executable returned `18.7` with `--version`. All eleven executable SHA-256 values are pinned in a manifest with SHA-256 `caf4f1194fc1e1cd35b94a793906e8a4cdcd745f3b568133eb1be03bb0355368`. [Tool manifest](../../../tmp/phase5-development/b04-fixture/edb-tool-sha256.txt)
+
+The provisioning check establishes archive integrity and executable provenance. The B04 fixture runs establish database behavior and teardown under their separate evidence record.

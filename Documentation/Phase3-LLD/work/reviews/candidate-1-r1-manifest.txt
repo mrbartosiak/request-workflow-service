@@ -1,0 +1,34 @@
+# Candidate 1 review manifest
+
+**Revision** PH3-C1-r1 · 2026-11-22 Europe/Warsaw. **Executor** Executor 1, GPT-6.2 Sol xhigh. **Dedicated reviewer** Reviewer 1, GPT-6.2 Astra xhigh. **Disposition** Submitted for independent review. No reviewer or owner adoption recorded here. [Candidate index](index.md) · [Review process](../../review-and-signoff.md)
+
+**Changed files** Initial revision. All 20 Markdown files listed below and this review manifest are new in `Phase3-LLD/work/candidate-1/`. Hashes cover exact on-disk bytes for all payload files, relative to this manifest. The manifest's own digest is reported in the review handoff.
+
+**Baseline** HLD-owner-r3, exact SHA-256 list `bfe47196d770ed040e1df8f3fb38bd5480614037bd642cb6396a2ccfa1f012ea`. [Signed source manifest](../../../tmp/phase2-hld-execution/hld-owner-r3.sha256) · [Shared brief](../../executor-brief.md) · [Owner kickoff](../../owner-kickoff.md) · [Owner identifiers](../../owner-identifier-requirements.md)
+
+**Verification** Recomputed the 25 source digests with zero mismatches. Inspected both interview pages. Verified candidate local paths and referenced heading anchors, index coverage and module lengths. Primary references and the DEC-13 supersession are recorded with their design impact. No database, performance, connector or restore scenario was run. [Source verification](sources.md) · [Performance status](performance.md) · [Planned PostgreSQL evidence](postgres-evidence.md)
+
+**Outstanding decisions** Concurrency and engine, identity and grants, signed-key/retention design, routes and bounds, allocator and mapping mechanism, integration budgets and scope, the six tooling options, and operating gates/topology remain in the reviewed comparison queue. [Decision proposals](decisions.md) · [Traceability](traceability.md)
+
+```text
+6d6526c869292aa871664a6b2b0aeb4a54bddb4e1a48ad3f183faf8438bb8e02  access.md
+03cd47a941d69d7afb50a1c5c4d9afd3cb8e1314e23108e4f60c6e7154363a9a  decisions.md
+b8f140d811e791e29e79038611f2d2860df73dbd93df66425091b58ce9962b3a  domain.md
+c9dae34372243dfef364e6ffc2b3bf30164005bbd602e5cf883e7316b6232156  identifiers.md
+11cc15d9497c1e43d99e56662bcdf09f40f5b8d01c2004afae289e97e6d41527  index.md
+648caea802eb4f7d9603479e7bb0bffef8050f41f34e3752c7a4449a17d58721  integration.md
+1d2e2dd730277214af0f11f95b6c0061920be2433806f870a722a0cd6ee2ceb1  operations.md
+3f45da6306dd2565c5455873c28180fb5309cffa7aebcd81048f875253220aca  performance.md
+306a214c03325cc90940c03360d2691c072733a6373d0bbf251c66471fc3861e  persistence.md
+b059ea8d21701c57087dcd1456787a088dbcef882b1a24f88871847b7017d018  postgres-evidence.md
+a16a17d53a485b7fb63e197824d59ea1e2bf47bb2bdc3b6ad6027b2409e38a51  queries.md
+70ce8a71f5e70eea59361c88c6e6141cbd3f0d0a78d02181e607364cc04a0dde  recovery.md
+8024a07cfc5f7d07b3ae40869a5f3d247d8004cd6df003ee1a4afaab3751ea41  rest.md
+7b80d48f5b10457a770ce929d38189fe3dc5072d6d90c2264c7f6ccce9145073  retries.md
+39700bf64b92a19e0b372657300a527a6eee7da24861b51a673887177522d5a1  sources.md
+bfad54804a2917b0c33d0744ba09ac08f8e1826c8898b2d6efa85bd55f2b0835  tooling.md
+3ec3abeef141a6294ab0a9b3c3a083b7dc443717c22d4768d468cf4061bdb3aa  traceability.md
+c29a0eb0c86fb4857338de77e1711be9d43974193e50bae39bd30e79fa0e7077  vendors.md
+36481ad25388c3ea64547e4740b0df1dc54c88184b2967d9275c68a713e0cf37  verification.md
+67bea104990a72e5a3df1043db4d48bf00e91bced0c6f756f4b4ae4f9d27c104  wiring.md
+```

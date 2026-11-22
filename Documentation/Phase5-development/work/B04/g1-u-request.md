@@ -1,0 +1,14 @@
+# G1-U decision request · Use the qualified PostgreSQL fixture
+
+**Pending owner disposition.** Use the exact B04 fixture revision `8f509e7fa2b538e9de99af2ca516c47a45d1d771`, tree `e8183816132e60e139ae16f41e43005de4027c45`, under `PH4-PLAN-r1` SHA-256 `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6`. The requested scope is repeatable local use for B05–B08 when each ticket becomes eligible. [B04 preflight authorization](g1-q-approval.md) · [Fixture evidence](evidence.md) · [Independent review](review.md) · [Integration](integration.md)
+
+| Item | Qualified selection |
+| --- | --- |
+| Host and binaries | Current Windows x64 workspace host. Portable EnterpriseDB PostgreSQL 18.7 archive SHA-256 `ead0bbc27fb678fa24dcf86b738981323042abd073c744103bf7f3aed23f9a33`. Use the verified runtime in `tmp/phase5-development/b04-fixture/runtime/pgsql/bin/`. |
+| JDBC closure | pgJDBC `42.7.14`, JAR SHA-256 `73914527305a40cce504b0d3d90b23caf565136912d607ae8ae7c5895512332c`. Checker Qual `3.55.1`, JAR SHA-256 `857658c8bdcbff794949a8d9922f88d63ee3751c203c7cd7d21ea97f9e745288`. Use the adopted Maven 3.9.16 and Java `25.0.5.1+2` build with those inputs. |
+| Access | Local `127.0.0.1:55480/workflow_db` for workflow, `127.0.0.1:55481/proof_db` for proof and `127.0.0.1:55482/workflow_db` for a restored workflow copy. Check availability before binding. Use separate scratch cluster directories and per-run SCRAM credentials. Separate migration and provisioning, command, proof, observer and backup roles. Both service sessions use bounded deadlines. |
+| Provisioning and teardown | Start owned standalone processes in new workspace scratch run directories with synthetic data. Qualifying and downstream runs sharing those ports are serialized. Use native workflow backup verification and isolated restore copies as applicable. Stop only the owned processes, confirm PID exit and cleared ports, and retain private scratch and sanitized handoffs. |
+
+B05 may install its fixture schema and test migration, JDBC command and rollback behavior. B06 may add its synthetic authority and independent proof data under purpose-specific grants. B07 and B08 may reuse the same qualified topology for their authorized integration checks. The local fixture has separate database restore boundaries on a shared Windows host. This scope covers the existing wave, with production topology, managed hosts, live data, and later waves governed by their separate approvals. [B05–B08](../../../Phase4-development-planning/first-slice.md) · [Action gates](../../../Phase4-development-planning/choices.md#later-authorizations)
+
+The dated public advisory recheck identifies `checker-qual:3.55.1` Snyk coverage as unconfirmed and does not cover all third-party DLLs bundled with the portable archive. The requested disposition is local synthetic fixture use with those documented evidence limits. [Advisory recheck](evidence.md#driver-resolution-and-advisory-recheck)

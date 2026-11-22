@@ -1,0 +1,9 @@
+# B09 execution assignment · Scope preparation, abort and witness
+
+**Base** `9469405a1e4b8bb1a345158f6b54d93ea59772ce` on `codex/b09-scope-preparation`. `PH4-PLAN-r1` SHA-256 `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6`. GPT-6.2 Sol xhigh (56), independent GPT-6.2 Astra xhigh (62). [G0](../g0-wave2-approval.md) · [G1-U](../g1-u-wave2-approval.md) · [G0-B](../g0-b-wave2-approval.md)
+
+**Ownership** Dedicated application ports and models, scope journal and witness adapters, additive migrations and fixture cases. Share the B05-owned workflow connection and B06 independent proof boundary. Scope-only additions to migrators are reserved to B09. B41 owns the HTTP evidence surface and bootstrap observability. [Criteria](../../../Phase4-development-planning/scope-proof.md#b09--scope-prepare-abort-and-witness) · [B05](../B05/integration.md) · [B06](../B06/integration.md)
+
+**Oracle** Prepare an ordered stable attempt with a protected exact delta and local witness. A lost prepare reply stops the local attempt. Exact repeats reuse one attempt and sequence. Reject conflicting scope, generation or digest. With certified terminal evidence close a pending or still unprepared attempt before any delayed allocation. Gaps and untrusted rollback keep scope fenced. Prove the witness shares the supported transaction and exclusive organization guard and is rolled back with the effect. Preserve the current B08 Create path. [Preparation](../../../Phase3-LLD/proof-resolution.md#scope-preparation) · [Continuity](../../../Phase3-LLD/authority-continuity.md) · [Witnesses](../../../Phase3-LLD/witness-records.md)
+
+**Return** Exact local candidate, focused red/green and serial real PostgreSQL proof, full strict offline test results, sanitized log hashes, ownership and teardown, and B10/B11 handoff in `Phase5-development/work/B09/evidence.md`. Reserve G1-U ports with the coordinator before a real fixture run.

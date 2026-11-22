@@ -1,0 +1,21 @@
+# Operational and release verification
+
+**Scope** A-07, Q-05/06/07/10, R-03/07/09/10, DEC-07/14. **Status** Approved directions with proposed starting settings. Topology, RPO and exact authority remain open. [HLD operating policies](../../../Phase2-HLD/operating-policy-alternatives.md)
+
+## Logs and admission
+
+`RequestTelemetry` records every incoming and outgoing request and every error, including early rejection, timeouts, lost response, retry and authority/vendor attempts. Allowlist UTC timestamp, direction, route/destination alias, server-generated correlation ID, operation, outcome, latency and a descriptive safe error code. Instrument application and perimeter paths. Exclude credentials, raw identifiers/keys/tokens, protected payload, query values, arbitrary exception messages and free text from vendor responses. Protected diagnostics provide approved error detail and correlation under limited access. Separate required lifecycle facts and immutable operator audit from request logs.
+
+Use protected bounded spool with per-node capacity proposed at 128 MiB, alert at 60% and restrict admission at 80%, reserving capacity for completion and rejected traffic. Defer outbound claims while saturated, adjust available windows and resume gradually after verified drain. Apply per-request size bounds and service budgets. If evidence is incomplete, surface missing records as an incident and Q-05 failure. Fault tests count admitted, rejected, failed and outbound attempts against records and scan synthetic secrets across normal delivery, spool, replay and drain. Log access and retention need approval. [HLD recovery](../../../Phase2-HLD/operations-and-recovery.md#observability-and-security) · [Retries](retries.md)
+
+## Advisories and test gates
+
+Review resolved direct/transitive versions and operator-visible components against Spring Security Advisories and Snyk before release and on proposed weekly schedule. Retain dated searches and scan outputs, zero findings, applicability, exposure, disposition and remediation owner. Block missing review or an applicable unresolved critical/high exposed finding under proposed criteria. Exceptions require approved authority, compensating controls, scope, expiry and follow-up, with missed targets still recorded. Exact deadlines and approval authority remain open. [Spring advisories](https://spring.io/security) · [Snyk database](https://security.snyk.io/)
+
+Use Phase 5 TDD. Report overall and package coverage, and gate agreed classes in workflow, access, retries, release and delivery. Proposed starting limits are cyclomatic complexity ≤10 per method and branch coverage ≥85% on agreed critical classes, with every workflow rule, authorization race and commit-window case passing. Require compatible migrations, package checks, regression and changed-scope evidence. Gate tooling/version and exclusions require approval. [Tooling](tooling.md) · [Verification](acceptance.md)
+
+## Recovery exercises
+
+Drill missing/invalid backups, old backup restore, warm failover, rollout rollback against old persisted records, worker backlog and independent authority failure. Record chronology, incident declaration, target service verified resumption within 60 minutes, user impact, known acknowledgment losses and distinct uncertain outcomes. Verify no divergent scope/receipt/ID can escape. Proposed staged checkpoints are proof collection, trusted reads, 10% fresh writes before full traffic, then separately authorized destination dispatch. Advance only after invariant checks and stable telemetry. Stop unsafe stages on stale authority or renewed ambiguity. Audit pause, permission, resume, suppression, reconciliation and approved compensation. Named incident, security and destination approvers, RPO and authority ownership remain open. [Recovery proof](recovery.md)
+
+Monitor offered/processed latency, queue and connection pressure, timed-out locks, unknown outcomes, expired/invalid tokens, log gaps, stale evidence and delivery age. Reconcile observed records before evaluating overload recovery; use rate shaping and bounded jitter to avoid retry amplification. A warm standby must demonstrate one writer and known commit continuity. A backup restore must demonstrate replay fencing and proven lifecycle/day-of-loss accounting. [Risk traceability](traceability.md)

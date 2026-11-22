@@ -1,0 +1,45 @@
+Project scope
+
+The system will provide a shared backend for requests within the company. It should support HR tickets, bug reports and their resolution across the organization, and other internal processes that depend on approval. The assumptions, high-level design (HLD), and low-level design (LLD) each need two editions tailored to how an AI or a person will read them.
+
+How the work will proceed
+
+1. Establish the concept. Capture the feature set and quality acceptance criteria in separate .md files. Sketch the domain by identifying small entities and describing how they relate. Shape the model for long-term maintenance and extension.
+2. Draft the HLD. Give it a directory of its own and use Markdown for the main document. Link to supporting documents in the repository so their text can be inserted into the main file to assemble the full design at any time. Keep individual documents relatively short, preferably below 5,000 characters, with longer documents allowed when there is a reason.
+3. Draft the LLD. Use a separate directory and a main Markdown file with links to the supporting documents in the repository. Structure those documents so they can be incorporated into a complete LLD at any time. Apply the same preferred length of under 5,000 characters per document, with room for justified exceptions.
+4. Plan implementation. Break the development work into detailed, manageable tasks.
+5. Implement the plan through test-driven development.
+6. Repeat the review and improvement cycle. Use each review to determine which changes are warranted. Revise the concept and then the design documents if the changes call for it. Add a new version entry to the planning documents before implementing the revised plan. Track version information in commits and leave endpoints unversioned.
+
+Ask me to approve every important decision during conceptual work, high-level design, low-level design, and development planning.
+
+Constraints that shape the concept
+
+- The implementation will use Java 25 and Spring Framework 7.0.11. Expect many new requirements after launch and design the system so it can absorb them.
+- Design for concurrent operation across multiple application instances. Use 100 requests per second as a measurable capacity requirement and guarantee idempotency at the database level.
+- Assume the organization already has user types, roles, and groups. Some roles or groups will have permission to approve particular requests.
+- Anticipate a workplace that uses Workday, Atlassian Jira, ShiftLeft, SonarQube, Sonatype, and other common enterprise software. Evaluate the business benefit of integrating with each tool and use ease of integration as an acceptance criterion. Favor base interfaces and implementation classes that can be extended for a particular integration, use case, or application. Put the common functionality and lifecycle behavior in the base classes.
+- Identify the kinds of production failures seen in comparable applications and design to withstand them. Support different business workflows and consider making the common functionality a dependency that each use-case-specific implementation can build on.
+
+What the design needs to cover
+
+The HLD should explain how the system enforces idempotency, controls concurrent activity, and ensures reliable delivery to integrations. Keep the design clear and maintainable.
+
+In the LLD, start with the configuration and classes Spring already provides. Bring in an additional dependency when its benefit justifies it, and explain that benefit in the LLD edition for AI readers. Evaluate the fit of the following options for this project.
+
+- YAML-based DTO generation and compile-time generation of DTO mappers.
+- CI checks for breaking API changes.
+- Type generation from the database schema and event payload generation from schemas.
+- Automated tests that enforce package boundaries.
+- Safe retries and tests that verify retry behavior against PostgreSQL.
+
+Quality expectations
+
+- Use Spring Security Advisories and the Snyk Vulnerability Database to guide security handling.
+  Spring Security Advisories — https://www.google.com/goto?url=CAESVwHEIkXX09d4tmaAdkFjJfVnizibDzCZ5ZFv1iuFCTqimQum_q8vKZKDP_1n29M5RAF-TbaVtLSOA2AG2JwsQXBuXeErULX1DALS0wJzJVOxklvtpTXgwg
+  Snyk Vulnerability Database — https://www.google.com/goto?url=CAESYAHEIkXXPiJDD1pdnZTtAVbKQ3CTBZ0Wb2jZdkg7urIy_hcAyUoELhGJCkRcXcxqPkyxy1sbmLJXe5BkbztYjHtwGDYkVSryqEYTEk5YWd9nnVw1atMAErdE5QUfLgMLuA
+- Require every request to finish in less than three seconds and aim for much faster responses in most cases.
+- Maintain low cyclomatic complexity across the codebase.
+- Write a descriptive, understandable log entry for every error and log all inbound and outbound requests.
+- Validate input carefully at the earliest opportunity. For example, have the controller reject characters that the database cannot accept.
+- Incorporate additional quality expectations when they are identified.

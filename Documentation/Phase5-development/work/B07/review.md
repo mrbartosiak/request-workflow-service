@@ -1,0 +1,9 @@
+# B07 operation keys and intent digest independent review
+
+**Accepted on 2026-11-22 (Europe/Warsaw).** GPT-6.2 Astra high (60) reviewed GPT-6.2 Sol xhigh (56) on `PH4-PLAN-r1`. Exact candidate `cadea474479bb885b45c9eb984870653ce682da1`, tree `7d32ee56eba06d8272b2844b87305a5e567dc6b4`, base `b2ca94d2bff9bf3b11901b856787c7864de6f8d2`. Verified evidence SHA-256 `2b99cfafbbdd8085032990e01f5e4e80d1ba617d7619f3ce45c226634633c317` and all four executor log hashes. [Frozen evidence](evidence.md) · [B07 criteria](../../../Phase4-development-planning/first-slice.md#b07--signed-operation-key-issuance-and-exact-intent-digest)
+
+Independent review confirmed current key-issue permission, stable scoped claims, bounded canonical authentication before claim parsing, safe diagnostics, trusted time and exact expiry, distinct fresh execution and lookup-only eligibility, purpose-separated key material and retained exact digest versions. MVC tests confirmed equivalent member order and exact decoded text semantics. The B05 receipt stores seconds and nanoseconds and B06 provides the current authority for rechecks. [Retry contract](../../../Phase3-LLD/retries.md) · [B06 integration](../B06/integration.md)
+
+Independent offline `clean verify` on a fresh archive and isolated cache passed all 311 tests across 11 projects, including 19 B07 tests. There were zero failures, errors or skips. The independent build log SHA-256 is `231004eb71a8ddd2317560f5a1103a668d7f0e342d5164749b185763fcc8ba45`. No material findings. [Independent build log](../../../tmp/phase5-development/b07-tools/logs/astra-cadea47-offline-verify.log)
+
+The combined reviewed build, qualified PostgreSQL fixture, transaction and schema, and authority/key interoperation support M0 after integrated verification. B08 owns the actual HTTP, restart, contention and guarded release evidence for M1. [Milestones](../../../Phase4-development-planning/milestones.md)

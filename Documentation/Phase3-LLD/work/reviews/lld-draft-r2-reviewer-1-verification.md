@@ -1,0 +1,12 @@
+# Reviewer 1 verification of the current Phase 3 LLD
+
+**Pass · 2026-11-22, 13:10 Europe/Warsaw.** I independently reverified the on-disk PH3-LLD-DRAFT-r2. The manifest SHA-256 is `6aa36aebf19220c7515492bdd49c044204d7cef2956704bdcbdcbbee94cebf17`. All 30 payload hashes match the revision covered by my technical signoff. All 319 local references resolve, including four heading fragments. The index links every root design module. The trace and decision tables account for all 10 assumptions, 11 features, 13 quality criteria, 10 risks and 14 decision IDs. [Manifest](lld-draft-r2-manifest.md) · [Prior signoff](lld-draft-r2-reviewer-1-signoff.md) · [Trace](../../traceability.md)
+
+| Prior finding | Fresh check |
+| --- | --- |
+| Pending confirmations | The internal resolver can reconcile original commit evidence while public access is fenced. The cut tests cover a lost prepare reply and both confirmation orders before protected release or dispatch. [Resolution](../../proof-resolution.md) · [Evidence plan](../../proof-evidence.md) |
+| Inbound replay after restore | Fresh admission requires proof for the source, tenant and identity domain. The fixture verifies a lost receipt, conflicting reuse and continued operation of an independently verified source. [Inbound recovery](../../inbound-recovery.md) |
+| Observation and race fixtures | The domain tests cover every state/action pair. HTTP tests use eligible observations, and competing actions have tokens bound to their own actor and action on the same original revision. [Functional evidence](../../verification.md) · [P6](../../postgres-evidence.md) |
+| Advisory gate | The LLD and signed comparison both block a missing review or an unresolved applicable, exposed high/critical finding. The LLD tracks a documented unexposed critical finding separately. [Operating policy](../../operations.md) · [Comparison](comparison-operations.md) |
+
+The four revision pins, nine underlying provenance pins, 37 shared-source hashes, 25 HLD hashes and 59 signed candidate/comparison payload hashes also match. The kickoff and identifier requirements remain binding. The six design groups and six tooling choices remain conditional, with Phase 4 subject to separate owner approval. I found no actionable residual issue in this design verification. Runtime, restore, connector and performance evidence remains planned. [Owner directions](../../owner-kickoff.md) · [Identifier requirements](../../owner-identifier-requirements.md) · [Decision status](../../decisions.md)

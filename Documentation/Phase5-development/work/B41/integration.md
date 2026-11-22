@@ -1,0 +1,7 @@
+# B41 integration and evidence handoff
+
+Local `main` fast-forwarded from integrated B09 `c2634d1d4741e0d90378609391a5de5d6640e34b` to independently approved B41 `5c7934e572545af263e412e28e043ad981d1112b`, tree `3529a7d512cb578f3f998674398ddbc250f25cab`. The final independent review SHA-256 is `c3d1cc32d07a5c79abd7c501a1763aeac8b1911e8b3d7683383ee0a9700bc7f1`. The strict offline integrated `-Psynthetic-http clean verify` passed 320 tests in ten suites. Log SHA-256 `6b7a8069dcae36660f75a79a0b8146b6687aa2ee8c114ab4a927bc13c3774167`. [Independent review](review.md) · [Integrated check](../../../../tmp/phase5-development/wave2-integrated/logs/b41-profile-clean-verify.log)
+
+The exact archive passed the normal 17-check B08 HTTP/PostgreSQL restart regression with one durable effect. The separately reconciled four request groups produced four starts, one error and four outcomes. The corrected distinction among timeout, ordinary transport error and malformed gzip was verified at the servlet boundary with bounded input-stream doubles. The direct connector timeout observation applies to the earlier revision. [Correction evidence](evidence-5c7934e.md) · [Independent review](review.md)
+
+B42 receives the typed outbound recorder and restricted evidence lookup for worker and spool integration. B48 receives the request-count reconciliation and sentinel evidence. [Operating tickets](../../../Phase4-development-planning/operating-verification.md)

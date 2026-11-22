@@ -1,0 +1,39 @@
+Implement a Java REST client SDK as a new sibling module in this repository. The SDK should make the existing Spring application's API easy to call from plain Java and Spring applications. Deliver a working, independently consumable library with tests and a README.
+
+## Inspect the project first
+
+Read the repository instructions, root build, existing modules, and REST API contract. Use the OpenAPI specification where available, and check it against controllers, request and response DTOs, security configuration, exception handlers, and integration tests. Identify the operations intended for client use and their actual HTTP methods, routes, authentication, request bodies, response codes, errors, and pagination.
+
+Use the real resource names and operations from this project. If the contract is ambiguous, resolve it from existing implementation and tests where possible. Document any unresolved operations and the evidence that prevented you from implementing them.
+
+## Create the SDK module
+
+- Follow the repository's Maven or Gradle conventions and register the new module in the existing build. Publish a standard library JAR with dependency metadata that works for consumers outside this repository.
+- Keep the SDK independent of the Spring application module. Use SDK-owned request and response types and keep Spring, Jakarta, HTTP transport, JSON library, and generated wire types out of public signatures.
+- Target Java 8 by default for broad compatibility, unless the repository explicitly establishes a higher minimum for this library or a concrete constraint requires one. Configure the target for the SDK module only. Keep the server's Java version and toolchain settings intact. Verify that the SDK's runtime dependencies also support its declared minimum.
+- Choose the HTTP transport based on that baseline. For Java 8, use a compatible Apache HttpClient release. For Java 11 or newer, prefer the JDK HttpClient when it meets the service's needs. Keep the transport and JSON dependencies internal to the implementation and account for dependency versions managed by the parent build.
+- Preserve existing server behavior. Keep changes outside the SDK module limited to the build wiring and any repository documentation needed to discover it.
+
+## Design the public API
+
+Expose a single client with a builder and typed resource objects. Aim for a usage pattern like `client.orders().get(orderId)` and `client.orders().create(request)`, using this application's actual resources. Keep DTOs as data objects. Expose business operations such as `cancel` where the service defines them.
+
+Provide synchronous methods with typed requests and responses. Use typed filter and pagination objects where the endpoints support them. Make the client reusable across threads and share the HTTP transport across resource objects. Expose `AutoCloseable` if the client owns resources requiring cleanup, and document lifecycle and thread-safety guarantees.
+
+Support a configurable base URI, connection and request timeouts, and the authentication schemes used by this API. For bearer authentication, accept a token supplier so callers can refresh credentials between requests. Document any thread-safety requirements for caller-supplied components.
+
+## Implement the HTTP behavior
+
+- Centralize URI construction, path and query encoding, authentication, JSON serialization, and error handling. Preserve path prefixes in base URIs and encode raw parameter values once.
+- Match the wire contract, including field names, null and omitted fields where they differ, date formats, empty responses, error payloads, and pagination. Handle additive response fields and define how unknown enum values are represented where relevant.
+- Provide SDK exceptions that distinguish an HTTP error response from a timeout, connection failure, or invalid response. Expose the HTTP status, service error code, and request or correlation ID when available. Keep credentials and sensitive payloads out of SDK diagnostics.
+- Check the transport's implicit retry behavior. Replay writes only when the operation is safe to replay under the service contract. Expose an idempotency key on operations that support it.
+- Handwrite endpoint mappings for a small surface. If an accurate OpenAPI specification makes generation worthwhile, pin the generator version and keep generated code behind the public resource API.
+
+## Verify and document
+
+Add focused tests at the HTTP boundary using a local server or the repository's existing test infrastructure. Cover representative reads and writes, the actual HTTP method and payload, authentication, base URI path prefixes, parameter encoding, and applicable empty responses, pagination, and error cases. Reuse existing service fixtures or integration tests where practical to check that the SDK matches the server.
+
+Build and test the SDK with the repository's build wrapper. Verify that a separate plain Java consumer can resolve and use the packaged SDK on the minimum supported JDK. If that runtime is unavailable, report exactly what you verified and what remains untested. Run relevant existing server checks where the module wiring could affect them.
+
+Add a module README with dependency coordinates, supported Java and server API versions, client setup, authentication, lifecycle, and representative calls using real endpoints. Finish with a summary of the implemented resources, the chosen Java baseline, the verification commands and results, and any contract gaps or build limitations.

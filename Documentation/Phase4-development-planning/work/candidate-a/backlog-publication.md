@@ -1,0 +1,13 @@
+# Phase 5 backlog · Publish allocation and confirmation
+
+## PRF-01 PublishGate and independent reservation
+
+**Needs** `PG-03`. **Scope** Local namespace gate and synthetic outside-restore `PublicationJournal`. **Red** Force two organizations/types and two instances, rollback burns, exhaustion, unproved epoch, repeated reservation and lost/late replies. Same attempt resolves once and a closed attempt cannot reopen. **Green** Reserve ref-bound PENDING entries in shared `initial-requests` with one unresolved/committed binding per ref, exact increasing signed-64-bit identities and monotonic burn. Hold the DB gate through transaction outcome. **Stop/handoff** Show gate blocking, controlled journal outcomes and preserved high-water. [Assignment order](../../../Phase3-LLD/identifiers.md#publish-assignment-and-proof) · [Failure windows](../../../Phase3-LLD/publication-journal.md)
+
+## PRF-02 Protected Publish and original association
+
+**Needs** `PRF-01`, `APP-02`, `PRF-03`, `INT-01`. **Scope** Publish route, committed witness/receipt/result, guarded projection and dispatch-facing port. **Red** Publish above 2^53 as exact string, including replay. Cut after reservation and after append. Withhold/mismatch witness proof after commit, then resolve on original lineage. Assert confirmed protected output only, original association, correct 503, zero second ID/effect, and pre-commit rollback across all local rows. **Green** Commit Publish state/fact, receipt, `PublicationWitness` and scoped obligation together. Confirm exact witness and update the guarded projection, with proof preconditions for authorized result, read and dispatch consumers. **Stop/handoff** Record P3/P4/P5 Publish variants and decimal-string cases. `PRF-04` integrates proof cuts across browse/history and worker send. [Journal witness and release](../../../Phase3-LLD/publication-journal.md) · [P3–P5/P7](../../../Phase3-LLD/postgres-evidence.md)
+
+## PRF-05 Two-process Publish ordering
+
+**Needs** `PRF-02`. **Scope** P7 full execution with independently authorized fixtures. **Red** Assert oracle rejects an allocated ID reused after burn, concurrent commits out of order, exhaustion overflow and string conversion loss. **Green** Force both cross-organization/type contenders and rollback. Check strict assignment commit order irrespective of confirmation order. Force exhausted namespace to fail closed. **Stop/handoff** Attach raw gate/commit observations, replay exact string and reference IDs. `REC-02` adds rewind. [P7](../../../Phase3-LLD/postgres-evidence.md) · [Publication namespace](../../../Phase3-LLD/identifiers.md)

@@ -1,0 +1,5 @@
+# G1-U owner approval · Wave 2 fixture reuse
+
+The owner's 2026-11-22 approval of [Wave 2](g0-wave2-request.md), SHA-256 `4cbbff002f290bd22dd079cddbab2482865fba04eeee8458d03c5ae3527cb079`, extends qualified synthetic fixture use to B09–B12, B32 and B41. B04 portable PostgreSQL 18.7, pgJDBC 42.7.14 and Checker Qual 3.55.1 retain the exact input hashes and isolated roles from the prior approved receipt. [Original exact fixture and hash scope](B04/g1-u-request.md) · [Prior approval](B04/g1-u-approval.md) · [Independent verification](B04/review.md)
+
+Use workflow `127.0.0.1:55480/workflow_db`, separate proof `127.0.0.1:55481/proof_db` and `127.0.0.1:55482/workflow_db` only for an isolated restored copy where a ticket requires rewind evidence. Provision new owned scratch clusters with per-run synthetic SCRAM credentials, purpose-specific roles and bounded commands. Serialize port ownership, keep raw fixture evidence in private scratch, and stop only the owned processes. This covers scoped migrations, proof/witness fault cuts and bounded two-process verification with the same shared Windows host and advisory coverage limits. [G0 extension](g0-wave2-approval.md)

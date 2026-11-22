@@ -1,0 +1,9 @@
+# B07 execution assignment · Signed operation keys and intent digest
+
+**Base** `b2ca94d2bff9bf3b11901b856787c7864de6f8d2` on `codex/b07-operation-keys`. `PH4-PLAN-r1` manifest SHA-256 `f14d62ef661d686d50353bdb5f2a16466d25308dd432016dbf8305f4d915d4e6`. GPT-6.2 Sol xhigh (56), independent GPT-6.2 Astra high (60). [G0](../g0-kickoff.md) · [B03 HTTP edge](../B03/integration.md) · [B06 authority review](../B06/review.md)
+
+**Ownership** Application key issuer, signed claims verifier, trusted time and exact digest contracts. Put any MVC comparison test in `adapter-http/` so the application stays framework-free. Use adopted Java, Maven and JUnit. Actual key-issue HTTP responses and receipt lookup follow in B08. No runtime or database dependency change is required.
+
+**Oracle** Issue only for an authorized stable principal with current scope and trusted time. Reject modified signatures, wrong purpose or scope, impossible epochs, unavailable clock and expiry. Distinguish active execution within the admission margin from earlier-generation authoritative lookup only. Establish exact 24-hour cutoff. Compare reordered valid JSON, exact decoded UTF-8 and changes to action, target, original observation and input. Use separate signing and keyed digest secrets, an unambiguous typed length-delimited tuple and diagnostics that omit raw keys and protected input. [B07 criteria](../../../Phase4-development-planning/first-slice.md#b07--signed-operation-key-issuance-and-exact-intent-digest) · [Retry contract](../../../Phase3-LLD/retries.md) · [REST contract](../../../Phase3-LLD/rest.md)
+
+**Return** Exact local code candidate and `Phase5-development/work/B07/evidence.md` with commands, initial failure, passing suite, bounds, and the claim, freshness, admission and digest APIs for B08, B12, B14 and B33.

@@ -1,0 +1,22 @@
+# Command keys and retry resolution
+
+**Scope** A-04, F-01/05/09, Q-02/03/13, R-01, DEC-04/05/08. **Status** Required durable replay behavior, proposed verifiable expiry. [HLD retries](../../../Phase2-HLD/retries-and-failure-timing.md)
+
+`CommandKeyIssuer` signs an opaque envelope binding issuer, org, principal, random key ID (at least 128 bits), writer generation, issue time, seven-day expiry and signer ID. Choose a fresh issued key for new intent, then keep the same key/body until resolved. Scope spans routes and survives grant changes and aliases. Store the scoped ID only. Keep verification across signer rotation and require trusted time. An unverifiable key cannot execute. Check expiry before receipt resolution and effect admission, including after waits. A known new commit's acknowledgment may arrive later. [REST](rest.md) · [Retention](retention.md)
+
+`IntentDigest` computes a keyed digest over versioned, length-framed normalized command shape: action, immutable target ref or Create type/scope, exact validated UTF-8 business values and original `expectedRevision` bytes where applicable. Serialization formatting and JSON property order have no effect. Maintain canonical-reader/digest versions while keys remain replayable. Use constant-time digest comparison. Digest access is restricted and values are never returned or logged. `ReceiptService` resolves through the unique key, holding its arbitration and scope locks as appropriate. [Records](records.md) · [Transactions](transactions.md)
+
+| Precedence | Result |
+| --- | --- |
+| Submitted request validation and current access first | Authenticate, verify key signature/scope, require a ready authority and authorize the submitted target/action. Denied requests get ordinary safe outcomes before any key history is disclosed. |
+| Authentic expired key | KEY_EXPIRED based solely on the envelope. Skip receipt lookup. Present, inaccessible, missing and purged receipts produce the same response. |
+| Unexpired old-generation key | Read only. Replay a trusted exact receipt with current original action/target/result access. A trusted changed-intent receipt may yield KEY_CONFLICT only with access to both sides. Otherwise always return KEY_FENCED, including absent, inaccessible, untrusted and purged bindings. |
+| Unexpired current-generation key | Arbitrate under the scoped unique key. Replay a trusted exact receipt with current original action/target/result access, or report KEY_CONFLICT when both sides are authorized. Conceal an inaccessible original result with the ordinary safe denial. Only trusted absent keys can admit a new command. |
+| Current key's wait exceeds budget | OUTCOME_PENDING. Retry unchanged under the same key. |
+| Commit or previous resolution uncertain | OUTCOME_UNKNOWN. Query the same key on the proven authority. Uncertain absence cannot authorize execution. |
+
+A permitted exact replay returns original status and authorized original result, including the original Publish ID if allowed, with zero effects. Ignore old observation age and current workflow eligibility. Before a planned replay/conflict releases, re-check submitted and original access, time and readiness. If the original becomes inaccessible but submitted remains allowed, fall back to KEY_FENCED for old keys and ordinary concealment for current keys. If expiry intervened, take the KEY_EXPIRED branch. Neither intrinsic-key outcome uses original-dependent fields or headers. [Access](access.md) · [REST](rest.md)
+
+**Proposed budgets** Overall 2.5 s from admission including a release allowance of 300 ms. Lock wait up to 200 ms per step subject to overall deadline. Up to one automatic fresh transaction for a definitive transient rollback or authoritative resolution, within budget. Unknown commit resolution first establishes the writer generation and terminal outcome of the old transaction by waiting for the unique key to resolve on the authoritative writer, or by equivalent engine evidence. Same-lineage definitive rollback permits reacquisition with the same preconditions. Recovery ambiguity fences the epoch. Never retry only the SQL mutation. [Recovery](recovery.md) · [Evidence](postgresql-evidence.md)
+
+**Alternative** Caller UUIDs plus durable retired markers skip key issuance but need indefinite or externally fenced marker storage. Signed keys bound retention at the cost of issuance, signer and clock processes. Reconcile uncertain expired or fenced operations before using a fresh key. [Proposals](proposals.md)

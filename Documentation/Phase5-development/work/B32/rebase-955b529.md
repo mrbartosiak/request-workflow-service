@@ -1,0 +1,5 @@
+# B32 exact candidate after B09 integration
+
+The coordinator rebased the nine-path fixture-only B32 patch from `3d1ecd87ab00ee63926cc416b387a7a9a81273f3` onto integrated B09 `c2634d1d4741e0d90378609391a5de5d6640e34b`. Exact candidate `955b529251c2b7e0bc2b6ae108c0d63dffdc796a`, tree `d3e1e856eb90736244a0ccc088ae120614b6f7ee`, on `codex/b32-harness-on-b09`. The original branch preserves the original candidate. [Frozen execution evidence](evidence.md) · [Integrated B09](../B09/integration.md)
+
+The coordinator verified disjoint path sets, equal complete binary diffs, original Sol authorship, a clean worktree and passing whitespace checks. Git used a command-local coordinator committer identity. The B08-compatible default migrations on B09 still produce workflow V001–V003 and proof V001–V002. B09 scope migrations have separate entry points. Independent review will rerun the fixture on the exact combined revision. [B09 opt-in migration handoff](../B09/evidence.md#b10-and-b11-handoff) · [Assignment](assignment.md)

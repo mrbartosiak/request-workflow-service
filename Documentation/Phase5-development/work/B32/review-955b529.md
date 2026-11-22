@@ -1,0 +1,62 @@
+# B32 independent review
+
+**Changes required** on commit `955b529251c2b7e0bc2b6ae108c0d63dffdc796a`, tree `d3e1e856eb90736244a0ccc088ae120614b6f7ee`, parent `c2634d1d4741e0d90378609391a5de5d6640e34b`. On 2026-11-22 GPT-6.2 Astra xhigh (62) independently reviewed GPT-6.2 Sol xhigh (56). Two fresh real runs stopped before the required restart. A separate controller check also found a false success when an expected stall carried an independent cleanup failure. [B32 criteria](../../../Phase4-development-planning/db-verification.md#b32--deterministic-real-engine-harness) · [Assignment](assignment.md)
+
+## Findings
+
+1. **The required winner response and restart did not reproduce.** Both unchanged runs returned 503 to A at the expected 201 assertion, after the independent readers had observed the committed Create and a reservation at the prerelease boundary. In both, B had already returned the expected 503 while A held its claim. The winner response was a separate failure. Both attempts ended before B's replay, A's restart and its exact response comparison. The previously successful executor run covered the original parent. The local Create wall-clock limit is 2,400 ms. Between B's pre-SQL and A's prerelease gate, 2.41 s and 2.47 s elapsed respectively. These measurements include the time before A's HTTP call, and do not identify a specific internal deadline check as the cause of A's 503. Rework the fixture's timing or scenario sequencing under the existing application limits and reproduce the winner, exact replay and controlled restart on the revised commit. Preserve the exact database blocker, zero-effect loser and independent precommit/prerelease observations. [First full attempt](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-green-01-run.log) · [Fresh unchanged repeat](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-green-02-run.log)
+2. **The stalled control can pass despite a teardown failure.** The PowerShell classifier at lines 130–134 accepts Java exit 1 and the expected timeout text. The Java driver prints the primary failure and any suppressed failures. The B04 helper attaches exceptions from dual-cluster cleanup to the original failure, and Java closes the app resources with the same suppression semantics. In my no-socket classifier control, the exact B32 harness and PowerShell script printed the expected timeout, an additional `IOException`, and then `PASS stalled B32 fixture run was discarded with exit 1.` The reviewer-only B04 method-entry overlay threw the genuine B32 assertion and a simulated exception during resource close. No real process failed to stop in this test or in the three real runs. Have the controller confirm the expected stall only after successful app and cluster teardown, and add a red for a timeout plus secondary cleanup failure. The genuine clean stall should continue to pass its wrapper. [Classifier source](../../../tmp/phase5-development/b32-astra-955b529/cleanup-classification.ps1) · [Classifier transcript](../../../tmp/phase5-development/b32-astra-955b529/classifier-output.log) · [Genuine stall](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-stall-01-stalled.log)
+
+## Exact inputs and artifact checks
+
+The independent checkout came from `git archive --format=tar` at the full candidate revision. I verified its embedded commit ID and all 231 extracted members. The archive SHA-256 is `cfdf475107008d307c80ed24914c505435ca2ed7ea3bff9e00d73ab235713d10`. The complete nine-file binary diff matched original candidate `3d1ecd87ab00ee63926cc416b387a7a9a81273f3` byte for byte, with SHA-256 `99669270d3bf7fe77171cf8119cd06e5f02f05da9eb46ce61b82da51dab61c1a`. The executor record SHA-256 is `1db37820be57909a25b0f0cef20913a2138f79da5f1bb3fb70f81f04bfe10d29`. Its nine outgoing hashes matched. The rebase record SHA-256 is `07aa8c970387b044f5141960505694742f3bbf94c260c0dfe17f941bf82021d9`. I verified the accepted plan digest, its 30 members and the Wave 2 scope receipt. [Frozen evidence](evidence.md) · [Rebase](rebase-955b529.md) · [Input checks](../../../tmp/phase5-development/b32-astra-955b529/input-checks.log) · [G0](../g0-wave2-approval.md) · [G0-B](../g0-b-wave2-approval.md) · [G1-U](../g1-u-wave2-approval.md)
+
+On Windows x64 I used the approved Maven 3.9.16, Temurin 25.0.5.1+2, Spring 7.0.11, Tomcat 11.0.29, PostgreSQL 18.7, pgJDBC 42.7.14 and Checker Qual 3.55.1. Hash checks covered the portable PostgreSQL and JDK archives, 11 PostgreSQL executables, the JDK tools used, the 423 qualified B01 cache entries in the reviewer's private copy, both Tomcat JAR/POM pairs, both JDBC closure JARs and the complete resolved 30-JAR runtime. Both strict-offline `clean verify` builds passed 317 tests in nine suites across 11 projects, with zero failures, errors or skips. The scan found 26 clean default JARs and 30 clean profile JARs. Only the profile included the B08 listener. Adding the real compiled B32 gate class to the private control classpath made the scanner exit 1. [Build and fixture script](../../../tmp/phase5-development/b32-astra-955b529/src/fixtures/postgresql/b32/Run-B32.ps1) · [Toolchain](../../../tmp/phase5-development/b32-astra-955b529/toolchain.log)
+
+## Independent database evidence
+
+Both full attempts launched two simultaneous B08 Servlet JVMs. Each worker constructed its own nonpooling workflow and proof data sources. The fixture-private reflection seam called the exact packaged `SyntheticHttpMain.serve` method with synthetic credentials, clock and JDBC decorators. This exercised the embedded listener, Servlet and normal Spring Create wiring. The worker supplies its own settings instead of exercising the production `main` settings parser. The published source patch is confined to the nine fixture paths. B09's scope migrations remain explicit opt-ins. All startup identities matched workflow versions 1–3 and proof versions 1–2 on the shared endpoint for each store, with identical packaged migrator hashes. Each observer rejected writes with SQLSTATE 25006 and with 42501 when its session read-only setting was relaxed. The controls rejected an aliased JVM/listener, wrong server, wrong schema, actor drift and clock drift. [Worker](../../../tmp/phase5-development/b32-astra-955b529/src/fixtures/postgresql/b32/B32Worker.java) · [Real run](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-green-02-run.log)
+
+| Fresh full attempt | First | Second |
+| --- | --- | --- |
+| JVM A / B and loopback listener ports | 33908 / 34812, ports 37914 / 37918 | 29052 / 7868, ports 44924 / 44929 |
+| Workflow / proof postmaster PIDs | 19828 / 20416 | 17264 / 29116 |
+| Live PostgreSQL wait from workflow observer | `pg_blocking_pids(24456) = {8312}` | `pg_blocking_pids(25436) = {24420}` |
+| Workflow backend at claim and commit / proof backend at prerelease | 8312 / 35100 | 24420 / 26224 |
+| Winner after prerelease | HTTP 503 | HTTP 503 |
+
+In the second full attempt the distinct A/B startup workflow backends were 15020/25504 and proof backends 24908/36536. The independent long-lived workflow/proof observers were 16316/20192. At 19:48:14.266461700Z A stopped after the successful claim. B's pending HTTP request initially had zero blockers. After B's release, PostgreSQL reported A as its blocker at 19:48:14.348934100Z. The workflow and proof observers reported zero effects while A held the claim, including after B's 503. At precommit on the same workflow backend at 19:48:15.316344200Z, the primary had zero visible business rows and proof had one reservation with zero preparations. At prerelease on the proof backend at 19:48:15.916105100Z, the primary had one request, body, fact, assignment and finalized receipt. Proof still had one reservation and zero preparations. The held and released timestamps for every cut are preserved in both transcripts. [Independent reads and cut timestamps](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-green-02-run.log)
+
+In the separate genuine stall, workflow backend 25260 entered at 19:45:51.816832Z and timed out at 19:45:51.998364100Z. The client received sanitized HTTP 500, all primary/proof counts remained zero, and both application sockets refused connections on exit. All three real runs stopped their owned postmasters and reported `pg_ctl status=3` with both fixed ports free. A separate OS inventory confirmed ports 55480 and 55481 clear at 19:48:32Z. The coordinator received the reservation release. There was no restore run. Independent coverage stops at the tested gates and partial same-key/timeout P1 behavior. The original executor's restart observation remains evidence on the original revision. B33–B40 scenario qualification remains outstanding. [Genuine stall](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-stall-01-stalled.log) · [Final listener inventory](../../../tmp/phase5-development/b32-astra-955b529/ports-after.log)
+
+## Reproduction and hashes
+
+From the repository root I used the following commands with the workspace set to the repository and a fresh scratch directory. The `Build` action installed its private copy of the previously qualified cache and invoked the strict-offline default/profile commands. Each native run had its own run ID. The classifier was run separately from those genuine native commands. [Reproduction script](../../../tmp/phase5-development/b32-astra-955b529/src/fixtures/postgresql/b32/Run-B32.ps1) · [Private input verifier](../../../tmp/phase5-development/b32-astra-955b529/verify_inputs.py)
+
+~~~powershell
+$workspace = (Get-Location).Path
+$review = Join-Path $workspace 'tmp/phase5-development/b32-astra-955b529'
+$fixture = Join-Path $review 'src/fixtures/postgresql/b32/Run-B32.ps1'
+$params = @{Workspace = $workspace; Scratch = "$review/runtime"}
+& $fixture @params -Action Build
+& $fixture @params -Action Leak -RunId b32-review-leak-01
+& $fixture @params -Action Stalled -RunId b32-review-stall-01
+& $fixture @params -Action Run -RunId b32-review-green-01
+& $fixture @params -Action Run -RunId b32-review-green-02
+~~~
+
+| Independent artifact | SHA-256 |
+| --- | --- |
+| [Inputs and archive members](../../../tmp/phase5-development/b32-astra-955b529/input-checks.log) | `8cf464ce7bb46004eb0814593cb92c287dee4343868a0b83e2b7fd3d1e5e6b32` |
+| [Default build](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/default-verify.log) | `99ca47731665e90f088a55e83671893767805067a650a8b15e748b2248814169` |
+| [Profile build](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/profile-verify.log) | `9fe395cc564569bb051d26808d9e6beaf771bb95edabd70e74f2872b4df99800` |
+| [Default artifact scan](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/default-artifact-scan.log) | `564c020fb31909c8735991c1b2a000d0d5a2614d00cfa02bbc6ca59f8fe840a0` |
+| [Profile artifact scan](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/profile-artifact-scan.log) | `816109892a4c747c1810f0e3ba91d3a3285358a3bd884c2f6f0cbd5659a0cc98` |
+| [Resolved runtime](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/runtime-sha256.csv) | `a9d6cef38b53ec4728f15395a26dd53358d3d40d93e03122f50eaec6d5f19df1` |
+| [Leak red](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-leak-01-leak.log) | `5e1036e1a867b08e26830222190f046af12de76b761ac5ae44bdd15ff371807d` |
+| [Genuine stall](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-stall-01-stalled.log) | `66e25c6dbf016ad57712db779ab318d8649acf2164aad87698f281f12cb2b489` |
+| [First full attempt](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-green-01-run.log) | `0f749bd436a633aa10e03337118d70f0aa53ab588caa359a6ca7f09751b41669` |
+| [Fresh full attempt](../../../tmp/phase5-development/b32-astra-955b529/runtime/logs/b32-review-green-02-run.log) | `79f9703e9a1eab611e7063700ffc60b2adfb9861732e4bbae5fb1ed013ff99d5` |
+| [Classifier control source](../../../tmp/phase5-development/b32-astra-955b529/cleanup-classification.ps1) | `163fd96f4b6aa2b76534cffedf379618b6bde55db5297e1ae3d230a4f77d3602` |
+| [Classifier transcript](../../../tmp/phase5-development/b32-astra-955b529/classifier-output.log) | `e5c7df47dd5c54781729825262b95fb869474be00b61021d5fb50012bb0a19af` |
+| [Final ports check](../../../tmp/phase5-development/b32-astra-955b529/ports-after.log) | `1dd77d76ad8b5d67b5bfdf10db852b064c8045d0099f37fe6edaa92e465a2a8b` |
