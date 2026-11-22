@@ -6,10 +6,14 @@ import com.company.requests.integration.DispatchStore.Invocation;
 import com.company.requests.integration.DispatchStore.Receipt;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiFunction;
 
-/** Drives the durable local dispatch protocol for a trusted synthetic recorder. */
+/** Drives the durable local dispatch protocol for a configured synthetic destination. */
 public final class DispatchCoordinator {
-    public enum Result { IDLE, DEFERRED, SUPPRESSED, STALE, CONFIRMED, UNKNOWN }
+    public enum Result {
+        IDLE, DEFERRED, SUPPRESSED, STALE, CONFIRMED, UNKNOWN, ACCEPTED_PENDING, RETRYABLE,
+        FAILED_PERMANENT, QUARANTINED
+    }
 
     @FunctionalInterface
     public interface SyntheticRecorder {
@@ -18,12 +22,20 @@ public final class DispatchCoordinator {
 
     private final DispatchStore store;
     private final WriterEpoch writer;
-    private final SyntheticRecorder recorder;
+    private final BiFunction<Claim, Invocation, Result> delivery;
 
     public DispatchCoordinator(DispatchStore store, WriterEpoch writer, SyntheticRecorder recorder) {
         this.store = Objects.requireNonNull(store);
         this.writer = Objects.requireNonNull(writer);
-        this.recorder = Objects.requireNonNull(recorder);
+        Objects.requireNonNull(recorder);
+        delivery = (claim, invocation) -> record(store, recorder, claim, invocation);
+    }
+
+    public DispatchCoordinator(SyntheticDelivery.Store store, WriterEpoch writer, SyntheticDelivery.Connector connector) {
+        this.store = Objects.requireNonNull(store);
+        this.writer = Objects.requireNonNull(writer);
+        Objects.requireNonNull(connector);
+        delivery = (claim, invocation) -> send(store, connector, claim, invocation);
     }
 
     public Result dispatchNext() {
@@ -48,6 +60,10 @@ public final class DispatchCoordinator {
         if (!claim.id().equals(invocation.id())) {
             throw new IllegalStateException("Armed invocation does not match the claim.");
         }
+        return delivery.apply(claim, invocation);
+    }
+
+    private static Result record(DispatchStore store, SyntheticRecorder recorder, Claim claim, Invocation invocation) {
         Optional<Receipt> receipt;
         try {
             receipt = Optional.ofNullable(recorder.record(invocation)).filter(value -> value.id().equals(claim.id()));
@@ -58,5 +74,17 @@ public final class DispatchCoordinator {
             return Result.STALE;
         }
         return receipt.isPresent() ? Result.CONFIRMED : Result.UNKNOWN;
+    }
+
+    private static Result send(SyntheticDelivery.Store store, SyntheticDelivery.Connector connector, Claim claim,
+                               Invocation invocation) {
+        Optional<SyntheticDelivery.Evidence> evidence;
+        try {
+            evidence = SyntheticDelivery.exact(invocation, connector.send(invocation));
+        } catch (RuntimeException ambiguous) {
+            evidence = Optional.empty();
+        }
+        return store.finishDelivery(claim, evidence)
+                .map(disposition -> Result.valueOf(disposition.name())).orElse(Result.STALE);
     }
 }
