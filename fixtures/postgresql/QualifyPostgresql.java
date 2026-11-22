@@ -167,19 +167,25 @@ public final class QualifyPostgresql {
 
     /** Run a two-cluster check with independently restricted runtime and observer identities. */
     static void workflowAndProof(String[] args, WorkflowAndProofCheck check) throws Exception {
+        workflowAndProof(args, "b06", check);
+    }
+
+    static void workflowAndProof(String[] args, String ticket, WorkflowAndProofCheck check) throws Exception {
+        require(List.of("b06", "b08").contains(ticket), "Unexpected dual-cluster fixture ticket");
+        String label = ticket.toUpperCase(Locale.ROOT);
         require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),
-                "Usage: run|cleanup BIN RUNS_DIRECTORY b06-RUN_ID");
-        require(args[3].matches("b06-[a-z0-9-]{1,32}"), "Invalid B06 run ID");
+                "Usage: run|cleanup BIN RUNS_DIRECTORY " + ticket + "-RUN_ID");
+        require(args[3].matches(ticket + "-[a-z0-9-]{1,32}"), "Invalid " + label + " run ID");
         require(Runtime.version().feature() == 25, "Java 25 required");
         Path bin = Path.of(args[1]).toRealPath();
         Path runs = Path.of(args[2]).toRealPath();
         require(Files.isDirectory(runs) && runs.getFileName().toString().equals("runs"), "Use the fixture scratch runs directory");
         Path run = runs.resolve(args[3]);
-        Path owner = run.resolve("b06-run-id");
+        Path owner = run.resolve(ticket + "-run-id");
         QualifyPostgresql probe = new QualifyPostgresql(bin, run);
         if (args[0].equals("cleanup")) {
             require(run.equals(run.toRealPath()) && owner.equals(owner.toRealPath())
-                    && Files.readString(owner).equals(args[3]), "Cleanup requires the original B06 run directory");
+                    && Files.readString(owner).equals(args[3]), "Cleanup requires the original " + label + " run directory");
             probe.dualCleanup();
             return;
         }
@@ -187,7 +193,7 @@ public final class QualifyPostgresql {
         requirePortFree(probe.proof.port);
         Files.createDirectory(run);
         Files.writeString(owner, args[3], StandardOpenOption.CREATE_NEW);
-        System.out.printf("B06 run=%s Java=%s UTC start=%s%n", run, Runtime.version(), Instant.now());
+        System.out.printf("%s run=%s Java=%s UTC start=%s%n", label, run, Runtime.version(), Instant.now());
         try {
             probe.runDualCheck(check);
         } catch (Exception | Error failure) {
@@ -199,7 +205,7 @@ public final class QualifyPostgresql {
             throw failure;
         }
         probe.dualCleanup();
-        System.out.println("PASS B06 workflow/proof verification and teardown " + Instant.now());
+        System.out.println("PASS " + label + " workflow/proof verification and teardown " + Instant.now());
     }
 
     private void runDualCheck(WorkflowAndProofCheck check) throws Exception {
@@ -213,10 +219,14 @@ public final class QualifyPostgresql {
         String proofId = systemId(proof);
         require(!workflowId.equals(proofId), "Workflow and proof system identifiers must differ");
         System.out.printf("PASS independent system identifiers workflow=%s proof=%s%n", workflowId, proofId);
-        check.run(new Connections(() -> connect(workflow, workflowAdmin), () -> connect(workflow, workflowWriter),
-                        () -> connect(workflow, workflowObserver), () -> restart(workflow, workflowId)),
-                new Connections(() -> connect(proof, proofAdmin), () -> connect(proof, proofWriter),
-                        () -> connect(proof, proofObserver), () -> restart(proof, proofId)));
+        check.run(connections(workflow, workflowWriter, workflowObserver, workflowId),
+                connections(proof, proofWriter, proofObserver, proofId));
+    }
+
+    private Connections connections(Cluster cluster, Role writer, Role observer, String systemId) {
+        return new Connections(() -> connect(cluster, cluster.admin), () -> connect(cluster, writer),
+                () -> connect(cluster, observer), () -> restart(cluster, systemId),
+                new RuntimeLogin(cluster.port, cluster.database, writer.name, writer.password));
     }
 
     private void restart(Cluster cluster, String expectedId) throws Exception {
@@ -229,7 +239,25 @@ public final class QualifyPostgresql {
         cleanup(List.of(proof, workflow));
     }
 
-    record Connections(SqlConnection migration, SqlConnection runtime, SqlConnection observer, Restart restart) { }
+    record Connections(SqlConnection migration, SqlConnection runtime, SqlConnection observer,
+                       Restart restart, RuntimeLogin runtimeLogin) { }
+
+    record RuntimeLogin(int port, String database, String username, String password) {
+        RuntimeLogin {
+            require(port == 55480 && database.equals("workflow_db") && username.equals("b04_workflow")
+                    || port == 55481 && database.equals("proof_db") && username.equals("b04_proof"),
+                    "Child JVM may only connect as an approved runtime role");
+        }
+
+        Connection open() throws SQLException {
+            return connect(port, database, username, password);
+        }
+
+        @Override
+        public String toString() {
+            return "RuntimeLogin[protected]";
+        }
+    }
 
     @FunctionalInterface
     interface Restart {
@@ -477,6 +505,10 @@ public final class QualifyPostgresql {
     }
 
     private static Connection connect(Cluster cluster, String database, String username, String password) throws SQLException {
+        return connect(cluster.port, database, username, password);
+    }
+
+    private static Connection connect(int port, String database, String username, String password) throws SQLException {
         Properties properties = new Properties();
         properties.setProperty("user", username);
         properties.setProperty("password", password);
@@ -487,7 +519,7 @@ public final class QualifyPostgresql {
         properties.setProperty("loginTimeout", "5");
         properties.setProperty("socketTimeout", "6");
         properties.setProperty("options", "-c statement_timeout=4000 -c lock_timeout=2500 -c idle_in_transaction_session_timeout=12000");
-        return DriverManager.getConnection("jdbc:postgresql://" + HOST + ":" + cluster.port + "/" + database, properties);
+        return DriverManager.getConnection("jdbc:postgresql://" + HOST + ":" + port + "/" + database, properties);
     }
 
     private static void denyConnection(Cluster cluster, String username, String password, String state) throws Exception {

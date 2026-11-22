@@ -81,7 +81,7 @@ public final class B05PostgresqlChecks {
                     "prior version must lack the V002 request table");
         }
         migrations.migrate();
-        require(List.of(1, 2).equals(versions()), "workflow migration history must be V001/V002");
+        require(List.of(1, 2, 3).equals(versions()), "workflow migration history must be V001–V003");
         Map<String, Object> catalog = catalog();
         require(catalog.keySet().containsAll(List.of("guard_version_positive", "request_pkey", "request_scope_unique",
                 "request_creation_order_unique", "request_counters", "request_publication_pair", "request_publication_unique",
@@ -94,7 +94,7 @@ public final class B05PostgresqlChecks {
                 WHERE conrelid = 'requests.request'::regclass AND conname = 'request_history_tail'
                 """, Boolean.class)), "request/history reference must be initially deferred");
         migrations.migrate();
-        require(List.of(1, 2).equals(versions()) && catalog.equals(catalog()), "migration reapply must be stable");
+        require(List.of(1, 2, 3).equals(versions()) && catalog.equals(catalog()), "migration reapply must be stable");
         if (prior) {
             require(Long.valueOf(7).equals(admin.queryForObject("""
                     SELECT policy_version FROM requests.policy_guard WHERE organization = 'previous-version'

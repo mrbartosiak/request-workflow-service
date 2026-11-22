@@ -65,6 +65,16 @@ public final class OperationKeyIssuer {
         return currentTime(claims).isBefore(claims.expiresAt());
     }
 
+    /** Reads the occurrence time on the same trusted clock used for the signed cutoff. */
+    Instant requireFreshInstant(VerifiedKey key) {
+        var claims = verifiedClaims(key);
+        var now = currentTime(claims);
+        if (!now.isBefore(claims.expiresAt())) {
+            throw new OperationKeyException(EXPIRED);
+        }
+        return now;
+    }
+
     private Eligibility eligibility(OperationKeyCodec.Claims claims, AuthenticatedActor actor,
                                     ScopeAuthority.Admission admission) {
         ReceiptKey scope = claims.receiptKey();

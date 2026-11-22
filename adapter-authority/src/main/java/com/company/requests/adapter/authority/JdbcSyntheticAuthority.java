@@ -65,7 +65,7 @@ public final class JdbcSyntheticAuthority implements ScopeAuthority, IdentityAut
         });
     }
 
-    private static void requireCurrent(Connection connection, Admission admission) throws SQLException {
+    static void requireCurrent(Connection connection, Admission admission) throws SQLException {
         try (var proof = connection.prepareStatement("""
                 SELECT 1 FROM request_authority.scope_genesis
                 CROSS JOIN request_authority.writer_epoch

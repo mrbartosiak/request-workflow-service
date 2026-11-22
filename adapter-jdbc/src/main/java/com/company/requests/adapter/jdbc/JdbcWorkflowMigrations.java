@@ -10,7 +10,8 @@ import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 /** Explicit PostgreSQL fixture migrations. Use the separately provisioned schema owner. */
 public final class JdbcWorkflowMigrations {
     private static final List<String> SCRIPTS = List.of(
-            "db/workflow/V001__policy_guard.sql", "db/workflow/V002__local_records.sql");
+            "db/workflow/V001__policy_guard.sql", "db/workflow/V002__local_records.sql",
+            "db/workflow/V003__create_claim_and_assignment.sql");
 
     private final JdbcTransactionRunner runner;
     private final JdbcTemplate jdbc;

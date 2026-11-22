@@ -3,12 +3,16 @@ package com.company.requests.adapter.authority;
 import com.company.requests.application.AuthorityUnavailableException;
 import com.company.requests.application.ScopeAuthority.Genesis;
 import com.company.requests.application.WriterEpoch;
+import com.company.requests.application.WriterLineage.Identity;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import javax.sql.DataSource;
 
 /** Explicit setup for an immutable synthetic proof slice, using the independent schema owner. */
 public final class JdbcAuthorityProvisioning {
+    private static final List<String> MIGRATIONS = List.of("V001__synthetic_authority.sql", "V002__create_proof.sql");
     private final ProofTransactions transactions;
 
     public JdbcAuthorityProvisioning(DataSource independentMigrationDataSource) {
@@ -16,7 +20,7 @@ public final class JdbcAuthorityProvisioning {
     }
 
     public void migrate() {
-        String source = migrationSource();
+        List<String> sources = MIGRATIONS.stream().map(JdbcAuthorityProvisioning::migrationSource).toList();
         transactions.run(false, connection -> {
             try (var statement = connection.createStatement()) {
                 statement.execute("SELECT pg_advisory_xact_lock(1919250805, 2)");
@@ -26,20 +30,33 @@ public final class JdbcAuthorityProvisioning {
                             version integer PRIMARY KEY CHECK (version > 0)
                         )
                         """);
-                try (var rows = statement.executeQuery("SELECT version FROM request_authority.schema_migration")) {
-                    if (rows.next()) {
-                        if (rows.getInt(1) != 1 || rows.next()) {
-                            throw new AuthorityUnavailableException();
+                var applied = new ArrayList<Integer>();
+                try (var rows = statement.executeQuery(
+                        "SELECT version FROM request_authority.schema_migration ORDER BY version")) {
+                    while (rows.next()) {
+                        applied.add(rows.getInt(1));
+                    }
+                }
+                if (applied.size() > sources.size()) {
+                    throw new AuthorityUnavailableException();
+                }
+                for (int index = 0; index < applied.size(); index++) {
+                    if (applied.get(index) != index + 1) {
+                        throw new AuthorityUnavailableException();
+                    }
+                }
+                try (var record = connection.prepareStatement(
+                        "INSERT INTO request_authority.schema_migration VALUES (?)")) {
+                    for (int index = applied.size(); index < sources.size(); index++) {
+                        for (String command : sources.get(index).split(";")) {
+                            if (!command.isBlank()) {
+                                statement.execute(command);
+                            }
                         }
-                        return null;
+                        record.setInt(1, index + 1);
+                        record.executeUpdate();
                     }
                 }
-                for (String command : source.split(";")) {
-                    if (!command.isBlank()) {
-                        statement.execute(command);
-                    }
-                }
-                statement.executeUpdate("INSERT INTO request_authority.schema_migration VALUES (1)");
                 return null;
             }
         });
@@ -111,8 +128,27 @@ public final class JdbcAuthorityProvisioning {
         });
     }
 
-    private static String migrationSource() {
-        String path = "/db/authority/V001__synthetic_authority.sql";
+    /** Bind the certified generation to its original live workflow process. Reapplication must be identical. */
+    public void certifyWorkflow(WriterEpoch writer, Identity identity) {
+        transactions.run(false, connection -> {
+            try (var insert = connection.prepareStatement("""
+                    INSERT INTO request_authority.workflow_certificate (
+                        generation, server_address, server_port, database_name, server_started_at
+                    ) SELECT generation, ?, ?, ?, ? FROM request_authority.writer_epoch
+                    WHERE writer_id = ? AND generation = ? ON CONFLICT (generation) DO NOTHING
+                    """)) {
+                JdbcCreateProof.bindIdentity(insert, 1, identity);
+                insert.setObject(5, writer.writerId());
+                insert.setLong(6, writer.generation());
+                insert.executeUpdate();
+            }
+            JdbcCreateProof.requireWorkflow(connection, writer, identity);
+            return null;
+        });
+    }
+
+    private static String migrationSource(String name) {
+        String path = "/db/authority/" + name;
         try (var stream = JdbcAuthorityProvisioning.class.getResourceAsStream(path)) {
             if (stream == null) {
                 throw new IllegalStateException("Missing independent authority migration.");

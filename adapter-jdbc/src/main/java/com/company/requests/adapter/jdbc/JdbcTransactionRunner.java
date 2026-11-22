@@ -1,13 +1,19 @@
 package com.company.requests.adapter.jdbc;
 
+import com.company.requests.application.AuthorityUnavailableException;
 import com.company.requests.application.CommitOutcomeUnknownException;
+import com.company.requests.application.TransactionBusyException;
 import com.company.requests.application.TransactionRunner;
+import java.sql.SQLException;
 import java.util.Objects;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
+import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -18,9 +24,19 @@ public final class JdbcTransactionRunner implements TransactionRunner {
     private final DataSource dataSource;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
+    private final boolean bounded;
 
     public JdbcTransactionRunner(DataSource commandDataSource) {
+        this(commandDataSource, false);
+    }
+
+    public static JdbcTransactionRunner forCreate(DataSource commandDataSource) {
+        return new JdbcTransactionRunner(commandDataSource, true);
+    }
+
+    private JdbcTransactionRunner(DataSource commandDataSource, boolean bounded) {
         dataSource = Objects.requireNonNull(commandDataSource, "command data source");
+        this.bounded = bounded;
         jdbc = new JdbcTemplate(dataSource);
         transaction = new TransactionTemplate(new JdbcTransactionManager(dataSource));
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -46,6 +62,10 @@ public final class JdbcTransactionRunner implements TransactionRunner {
                 T result;
                 ACTIVE_COMMAND.set(new CommandConnection(dataSource, holder));
                 try {
+                    if (bounded) {
+                        jdbc.execute("SET LOCAL lock_timeout = '200ms'");
+                        jdbc.execute("SET LOCAL statement_timeout = '400ms'");
+                    }
                     result = work.get();
                 } finally {
                     ACTIVE_COMMAND.remove();
@@ -62,8 +82,27 @@ public final class JdbcTransactionRunner implements TransactionRunner {
             if (workReturned[0]) {
                 throw new CommitOutcomeUnknownException(failure);
             }
+            if (bounded && isWaitFailure(failure)) {
+                throw new TransactionBusyException(failure);
+            }
+            if (bounded && failure instanceof CannotCreateTransactionException) {
+                throw new AuthorityUnavailableException();
+            }
             throw failure;
         }
+    }
+
+    private static boolean isWaitFailure(RuntimeException failure) {
+        if (failure instanceof PessimisticLockingFailureException || failure instanceof QueryTimeoutException) {
+            return true;
+        }
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sql
+                    && ("55P03".equals(sql.getSQLState()) || "57014".equals(sql.getSQLState()))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static void requireBoundConnection(DataSource dataSource) {

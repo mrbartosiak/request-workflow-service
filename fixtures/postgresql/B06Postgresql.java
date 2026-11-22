@@ -148,7 +148,7 @@ public final class B06Postgresql {
                 """);
         proofAdmin.execute("GRANT INSERT ON request_authority.creation_reservation TO b04_proof");
         proofAdmin.execute("GRANT UPDATE (last_ordinal) ON request_authority.creation_counter TO b04_proof");
-        require(List.of(1, 2).equals(workflowObserver.queryForList(
+        require(List.of(1, 2, 3).equals(workflowObserver.queryForList(
                 "SELECT version FROM requests.schema_migration ORDER BY version", Integer.class)),
                 "workflow retains consecutive migrations");
         expect(AuthorityUnavailableException.class, () -> access.requireCreate(OWNER, TYPE));
