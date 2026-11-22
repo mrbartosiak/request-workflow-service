@@ -3,7 +3,7 @@ package com.company.requests.adapter.http;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
@@ -11,12 +11,12 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
-import java.util.zip.ZipException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
@@ -228,26 +228,44 @@ public final class RestInputValidator {
     }
 
     private static String readBody(HttpServletRequest request) {
-        try (var input = decodedBody(request)) {
-            var bytes = input.readNBytes(MAX_REQUEST_BYTES + 1);
-            if (bytes.length > MAX_REQUEST_BYTES) {
-                throw new RestInputException(Code.REQUEST_TOO_LARGE, null, false);
-            }
-            return utf8(bytes);
-        } catch (CharacterCodingException | ZipException ex) {
-            throw invalid(null);
+        boolean gzip = gzipEncoding(request);
+        try (var input = request.getInputStream()) {
+            return readUtf8(gzip ? readGzip(input) : input.readNBytes(MAX_REQUEST_BYTES + 1));
         } catch (IOException ex) {
             throw transportInput(ex);
         }
     }
 
-    private static InputStream decodedBody(HttpServletRequest request) throws IOException {
+    private static byte[] readGzip(InputStream input) {
+        var source = new GzipSource(input);
+        try (var gzip = new GZIPInputStream(source)) {
+            byte[] decoded = gzip.readNBytes(MAX_REQUEST_BYTES + 1);
+            source.checkReadFailure();
+            return decoded;
+        } catch (IOException ex) {
+            source.checkReadFailure();
+            throw invalid(null);
+        }
+    }
+
+    private static String readUtf8(byte[] bytes) {
+        if (bytes.length > MAX_REQUEST_BYTES) {
+            throw new RestInputException(Code.REQUEST_TOO_LARGE, null, false);
+        }
+        try {
+            return utf8(bytes);
+        } catch (CharacterCodingException ex) {
+            throw invalid(null);
+        }
+    }
+
+    private static boolean gzipEncoding(HttpServletRequest request) {
         var encodings = Collections.list(request.getHeaders(HttpHeaders.CONTENT_ENCODING));
         if (encodings.isEmpty() || (encodings.size() == 1 && encodings.getFirst().equalsIgnoreCase("identity"))) {
-            return request.getInputStream();
+            return false;
         }
         if (encodings.size() == 1 && encodings.getFirst().equalsIgnoreCase("gzip")) {
-            return new GZIPInputStream(request.getInputStream());
+            return true;
         }
         throw new RestInputException(Code.UNSUPPORTED_MEDIA, null, true);
     }
@@ -353,7 +371,48 @@ public final class RestInputValidator {
     }
 
     private static RestInputException transportInput(IOException failure) {
-        Outcome outcome = failure instanceof InterruptedIOException ? Outcome.TRANSPORT_TIMEOUT : Outcome.TRANSPORT_FAILURE;
-        return new RestInputException(Code.INVALID_INPUT, null, false, outcome);
+        var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+        for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+            if (cause instanceof SocketTimeoutException) {
+                return new RestInputException(Code.INVALID_INPUT, null, false, Outcome.TRANSPORT_TIMEOUT);
+            }
+        }
+        return new RestInputException(Code.INVALID_INPUT, null, false, Outcome.TRANSPORT_FAILURE);
+    }
+
+    /** Tracks failures even when gzip member lookahead consumes an IOException. The caller owns closing the stream. */
+    private static final class GzipSource extends InputStream {
+        private final InputStream transport;
+        private IOException readFailure;
+
+        private GzipSource(InputStream transport) {
+            this.transport = transport;
+        }
+
+        @Override
+        public int read() throws IOException {
+            try {
+                return transport.read();
+            } catch (IOException failure) {
+                readFailure = failure;
+                throw failure;
+            }
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            try {
+                return transport.read(buffer, offset, length);
+            } catch (IOException failure) {
+                readFailure = failure;
+                throw failure;
+            }
+        }
+
+        private void checkReadFailure() {
+            if (readFailure != null) {
+                throw transportInput(readFailure);
+            }
+        }
     }
 }

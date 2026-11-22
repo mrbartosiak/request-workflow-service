@@ -1,5 +1,6 @@
 package com.company.requests.bootstrap;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.time.Clock;
@@ -13,6 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import java.util.zip.GZIPOutputStream;
 
 import com.company.requests.adapter.http.RequestEvidenceFilter;
 import com.company.requests.adapter.http.RestInputValidator;
@@ -29,12 +31,15 @@ import com.company.requests.application.evidence.RequestEvidenceRecorder;
 import com.company.requests.application.evidence.RestrictedEvidenceLookup;
 import com.company.requests.integration.OutboundEvidenceRecorder;
 import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
+import org.springframework.mock.web.DelegatingServletInputStream;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import tools.jackson.databind.json.JsonMapper;
@@ -60,6 +65,7 @@ class RequestEvidenceTest {
             {"type":"HR_TICKET","name":"%s","body":"%s"}
             """.formatted(NAME, BODY);
     private static final String FAULT_HEADER = "X-Evidence-Test-Transport";
+    private static final String BODY_FAULT = RequestEvidenceTest.class.getName() + ".bodyFault";
     private static final Instant NOW = Instant.parse("2026-11-22T14:30:12.123456789Z");
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
     private static final JsonMapper JSON = new JsonMapper();
@@ -69,13 +75,7 @@ class RequestEvidenceTest {
         var records = new ArrayList<RequestEvidenceEvent>();
         var recorder = new RequestEvidenceRecorder(CLOCK, records::add);
         var calls = new AtomicInteger();
-        var controller = createController(calls);
-
-        try (var context = new AnnotationConfigWebApplicationContext()) {
-            context.setServletContext(new MockServletContext());
-            context.register(RequestsConfiguration.class);
-            context.addBeanFactoryPostProcessor(factory -> factory.registerSingleton("createEvidenceFixture", controller));
-            context.refresh();
+        try (var context = mvcContext(calls)) {
             var mvc = MockMvcBuilders.webAppContextSetup(context).addFilters(new RequestEvidenceFilter(recorder),
                     (request, response, chain) -> chain.doFilter(withSyntheticReadTimeout(request), response)).build();
 
@@ -150,6 +150,47 @@ class RequestEvidenceTest {
     }
 
     @Test
+    void classifiesBodyReadFailuresAndCompleteMalformedGzipByOrigin() throws Exception {
+        var records = new ArrayList<RequestEvidenceEvent>();
+        var recorder = new RequestEvidenceRecorder(CLOCK, records::add);
+        var calls = new AtomicInteger();
+        try (var context = mvcContext(calls)) {
+            var mvc = MockMvcBuilders.webAppContextSetup(context).addFilters(new RequestEvidenceFilter(recorder),
+                    (request, response, chain) -> chain.doFilter(withBodyReadFault(request), response)).build();
+            var wrapped = new IOException(EXCEPTION, new IOException(EXCEPTION, new SocketTimeoutException(EXCEPTION)));
+            var timeout = mvc.perform(bodyRequest().content(CREATE)
+                    .requestAttr(BODY_FAULT, new BodyReadFault(1, wrapped))).andReturn();
+            byte[] gzip = gzipBody();
+            var gzipTimeout = mvc.perform(bodyRequest().header(HttpHeaders.CONTENT_ENCODING, "gzip").content(gzip)
+                    .requestAttr(BODY_FAULT, new BodyReadFault(0, wrapped))).andReturn();
+            // Once the complete member has been read, the JDK decoder looks for another member.
+            var readFailure = mvc.perform(bodyRequest().header(HttpHeaders.CONTENT_ENCODING, "gzip").content(gzip)
+                    .requestAttr(BODY_FAULT, new BodyReadFault(gzip.length, new IOException(EXCEPTION)))).andReturn();
+            var invalidGzip = mvc.perform(bodyRequest().header(HttpHeaders.CONTENT_ENCODING, "gzip")
+                    .content(Arrays.copyOf(gzip, gzip.length - 2))).andReturn();
+
+            assertAll(
+                    () -> checkProblem(timeout, records, 400, "invalid_input", Operation.CREATE_REQUEST,
+                            Outcome.TRANSPORT_TIMEOUT),
+                    () -> checkProblem(gzipTimeout, records, 400, "invalid_input", Operation.CREATE_REQUEST,
+                            Outcome.TRANSPORT_TIMEOUT),
+                    () -> checkProblem(readFailure, records, 400, "invalid_input", Operation.CREATE_REQUEST,
+                            Outcome.TRANSPORT_FAILURE),
+                    () -> checkProblem(invalidGzip, records, 400, "invalid_input", Operation.CREATE_REQUEST,
+                            Outcome.INVALID_INPUT));
+            assertEquals(0, calls.get());
+            assertEquals(12, records.size());
+            assertEquals(4, records.stream().map(RequestEvidenceEvent::correlationId).distinct().count());
+            assertEquals(List.of("TRANSPORT", "TRANSPORT", "TRANSPORT", "VALIDATION"), records.stream()
+                    .filter(event -> event.phase() == Phase.OUTCOME)
+                    .map(event -> JSON.readTree(event.json()).get("stage").asString()).toList());
+            var sentinels = List.of(BEARER, KEY, BODY, EXCEPTION);
+            assertTrue(records.stream().map(RequestEvidenceEvent::json)
+                    .noneMatch(line -> sentinels.stream().anyMatch(line::contains)), "Sensitive value escaped into evidence.");
+        }
+    }
+
+    @Test
     void lookupRequiresTheIssuedCapabilityAndAuditsDenialsWithoutReading() {
         var records = new ArrayList<RequestEvidenceEvent>();
         var recorder = new RequestEvidenceRecorder(CLOCK, records::add);
@@ -173,6 +214,16 @@ class RequestEvidenceTest {
         assertEquals(List.of(new RestrictedEvidenceLookup.Access(NOW, false),
                 new RestrictedEvidenceLookup.Access(NOW, false), new RestrictedEvidenceLookup.Access(NOW, true)), access);
         assertEquals(3, records.size(), "Lookup access belongs to a separate audit stream.");
+    }
+
+    private static AnnotationConfigWebApplicationContext mvcContext(AtomicInteger calls) {
+        var context = new AnnotationConfigWebApplicationContext();
+        context.setServletContext(new MockServletContext());
+        context.register(RequestsConfiguration.class);
+        var controller = createController(calls);
+        context.addBeanFactoryPostProcessor(factory -> factory.registerSingleton("createEvidenceFixture", controller));
+        context.refresh();
+        return context;
     }
 
     private static SyntheticCreateController createController(AtomicInteger calls) {
@@ -206,13 +257,64 @@ class RequestEvidenceTest {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(Arrays.copyOf(label.getBytes(UTF_8), 32));
     }
 
+    private static MockHttpServletRequestBuilder bodyRequest() {
+        return post("/requests").header(HttpHeaders.AUTHORIZATION, "Bearer " + BEARER)
+                .header("Idempotency-Key", KEY).contentType("application/json");
+    }
+
+    private static byte[] gzipBody() throws IOException {
+        var bytes = new ByteArrayOutputStream();
+        try (var gzip = new GZIPOutputStream(bytes)) {
+            // Invalid JSON shape keeps this request away from the command even when a decoder swallows the read fault.
+            gzip.write(("{\"body\":\"" + BODY + "\"}").getBytes(UTF_8));
+        }
+        return bytes.toByteArray();
+    }
+
+    private static ServletRequest withBodyReadFault(ServletRequest request) {
+        if (!(request instanceof HttpServletRequest http)
+                || !(http.getAttribute(BODY_FAULT) instanceof BodyReadFault fault)) {
+            return request;
+        }
+        return new HttpServletRequestWrapper(http) {
+            @Override
+            public ServletInputStream getInputStream() throws IOException {
+                var input = super.getInputStream();
+                return new DelegatingServletInputStream(input) {
+                    private int remaining = fault.bytesBeforeFailure();
+
+                    @Override
+                    public int read() throws IOException {
+                        if (remaining == 0) {
+                            throw fault.failure();
+                        }
+                        remaining--;
+                        return input.read();
+                    }
+
+                    @Override
+                    public int read(byte[] bytes, int offset, int length) throws IOException {
+                        if (remaining == 0 && length > 0) {
+                            throw fault.failure();
+                        }
+                        int count = input.read(bytes, offset, Math.min(remaining, length));
+                        if (count > 0) {
+                            remaining -= count;
+                        }
+                        return count;
+                    }
+                };
+            }
+        };
+    }
+
     private static ServletRequest withSyntheticReadTimeout(ServletRequest request) {
         if (!(request instanceof HttpServletRequest http) || http.getHeader(FAULT_HEADER) == null) {
             return request;
         }
         return new HttpServletRequestWrapper(http) {
             @Override
-            public jakarta.servlet.ServletInputStream getInputStream() throws IOException {
+            public ServletInputStream getInputStream() throws IOException {
                 throw new SocketTimeoutException(EXCEPTION);
             }
         };
@@ -254,4 +356,6 @@ class RequestEvidenceTest {
     private static long count(List<RequestEvidenceEvent> events, Phase phase) {
         return events.stream().filter(event -> event.phase() == phase).count();
     }
+
+    private record BodyReadFault(int bytesBeforeFailure, IOException failure) { }
 }
