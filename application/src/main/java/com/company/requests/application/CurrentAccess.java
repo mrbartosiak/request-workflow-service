@@ -1,9 +1,12 @@
 package com.company.requests.application;
 
+import com.company.requests.application.EffectiveScopeStore.Assignment;
 import com.company.requests.application.EffectiveScopeStore.Field;
 import com.company.requests.application.EffectiveScopeStore.Grant;
 import com.company.requests.application.EffectiveScopeStore.GrantKey;
+import com.company.requests.application.EffectiveScopeStore.Visibility;
 import com.company.requests.application.ScopeAuthority.Admission;
+import com.company.requests.domain.Action;
 import com.company.requests.domain.OrganizationId;
 import com.company.requests.domain.Request;
 import com.company.requests.domain.RequestRef;
@@ -122,25 +125,86 @@ public final class CurrentAccess {
                 .map(target -> fields(actor, guard, target)).orElseGet(Set::of);
     }
 
+    Admission requireActionScope(AuthenticatedActor actor, PolicyGuard guard) {
+        if (effective == null || !actor.organization().equals(guard.organization())) {
+            throw new AuthorityUnavailableException();
+        }
+        return requireProof(policy(actor), guard);
+    }
+
+    /** The caller has proved the current scope on the guard before asking about a target. */
+    Optional<ActionTarget> actionTarget(AuthenticatedActor actor, PolicyGuard guard, RequestRef ref, Action action) {
+        var policy = policy(actor);
+        var found = effective.requests().find(guard.organization(), ref)
+                .filter(target -> target.organization().equals(actor.organization()) && target.ref().equals(ref))
+                .filter(target -> target.state() != RequestState.DELETED);
+        if (found.isEmpty()) {
+            return Optional.empty();
+        }
+        var target = found.orElseThrow();
+        try {
+            if (!permitted(policy, guard, actor, Grant.ROW_READ, target.type())) {
+                return Optional.empty();
+            }
+        } catch (AccessDeniedException unregistered) {
+            return Optional.empty();
+        }
+        var scope = rowScope(actor, guard, target);
+        if (!scope.visible()) {
+            return Optional.empty();
+        }
+        Field fact = switch (action) {
+            case EDIT, VERIFY, ACCEPT -> Field.BODY;
+            case REJECT, DELETE, PUBLISH -> Field.NAME;
+            case CREATE -> throw new IllegalArgumentException("Create has no action context.");
+        };
+        Grant materialGrant = fact == Field.BODY ? Grant.FIELD_READ_BODY : Grant.FIELD_READ_NAME;
+        // The B10 synthetic material mask makes both NAME and BODY assignee-only.
+        if (!permitted(policy, guard, actor, Grant.context(action), target.type())
+                || !permitted(policy, guard, actor, Grant.execute(action), target.type())
+                || !permitted(policy, guard, actor, materialGrant, target.type())
+                || !scope.visibility().fields().contains(Field.STATE)
+                || !scope.visibility().fields().contains(fact)
+                || !scope.assigned()
+                || (action == Action.ACCEPT && actor.person().filter(
+                        person -> !person.equals(target.originatingPersonId())).isEmpty())) {
+            throw new AccessDeniedException();
+        }
+        return Optional.of(new ActionTarget(target, scope.assignment(), scope.visibility(), fact));
+    }
+
+    record ActionTarget(Request request, Assignment assignment, Visibility visibility, Field materialField) { }
+
     private Set<Field> fields(AuthenticatedActor actor, PolicyGuard guard, Request target) {
         if (!guard.organization().equals(actor.organization()) || !target.organization().equals(actor.organization())
                 || target.state() == RequestState.DELETED
                 || !permitted(policy(actor), guard, actor, Grant.CREATE_RESULT, target.type())) {
             return Set.of();
         }
-        var assignment = effective.store().assignment(guard, target.ref()).orElseThrow(AuthorityUnavailableException::new);
-        var visibility = effective.store().visibility(guard, target.ref());
-        boolean assigned = actor.person().filter(assignment.person()::equals).isPresent();
-        if (!visibility.fields().contains(Field.REF) || (visibility.assigneeOnly() && !assigned)) {
+        var scope = rowScope(actor, guard, target);
+        if (!scope.visible()) {
             return Set.of();
         }
         var permitted = EnumSet.noneOf(Field.class);
-        permitted.addAll(visibility.fields());
-        if (!assigned) {
+        permitted.addAll(scope.visibility().fields());
+        if (!scope.assigned()) {
             permitted.remove(Field.NAME);
             permitted.remove(Field.BODY);
         }
         return Set.copyOf(permitted);
+    }
+
+    private RowScope rowScope(AuthenticatedActor actor, PolicyGuard guard, Request target) {
+        var assignment = effective.store().assignment(guard, target.ref()).orElseThrow(AuthorityUnavailableException::new);
+        var visibility = effective.store().visibility(guard, target.ref());
+        boolean assigned = actor.person().filter(assignment.person()::equals).isPresent();
+        return new RowScope(assignment, visibility, assigned);
+    }
+
+    private record RowScope(Assignment assignment, Visibility visibility, boolean assigned) {
+        boolean visible() {
+            return visibility.fields().contains(Field.REF) && (!visibility.assigneeOnly() || assigned);
+        }
     }
 
     private boolean permitted(SyntheticScopePolicy policy, PolicyGuard guard, AuthenticatedActor actor,

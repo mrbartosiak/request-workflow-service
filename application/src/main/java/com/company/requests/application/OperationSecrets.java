@@ -41,6 +41,11 @@ public final class OperationSecrets {
         return digestVersion;
     }
 
+    boolean containsMaterial(byte[] material) {
+        var key = new SecretKeySpec(material, HMAC);
+        return signingKeys.containsValue(key) || digestKeys.containsValue(key);
+    }
+
     Mac signingMac(int version) {
         var key = signingKeys.get(version);
         return key == null ? null : mac(key, SIGNING_PURPOSE);

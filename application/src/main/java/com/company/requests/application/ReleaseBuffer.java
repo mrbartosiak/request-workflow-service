@@ -12,7 +12,17 @@ public final class ReleaseBuffer {
     private final AtomicReference<Slot> contents = new AtomicReference<>();
 
     public ReleaseBuffer(int capacity) {
-        if (capacity < 1 || capacity > MAX_BYTES) {
+        this(capacity, MAX_BYTES);
+    }
+
+    static ReleaseBuffer actionContext() {
+        // A 16 KiB body can require six output bytes per input byte when JSON escapes controls.
+        int capacity = 128 * 1024;
+        return new ReleaseBuffer(capacity, capacity);
+    }
+
+    private ReleaseBuffer(int capacity, int limit) {
+        if (capacity < 1 || capacity > limit) {
             throw new IllegalArgumentException("Release capacity is outside the allowed range.");
         }
         this.capacity = capacity;

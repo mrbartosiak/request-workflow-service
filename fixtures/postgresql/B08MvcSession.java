@@ -29,6 +29,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.datasource.AbstractDataSource;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
@@ -69,16 +70,20 @@ final class B08MvcSession implements AutoCloseable {
     }
 
     Reply invoke(Call call) throws Exception {
-        var request = MockMvcRequestBuilders.post(call.route()).accept(MediaType.APPLICATION_JSON,
-                MediaType.APPLICATION_PROBLEM_JSON);
-        if (!call.bearer().isEmpty()) {
-            request.header(HttpHeaders.AUTHORIZATION, "Bearer " + call.bearer());
-        }
+        var request = MockMvcRequestBuilders.post(call.route());
         if (!call.key().isEmpty()) {
             request.header("Idempotency-Key", call.key());
         }
         if (!call.body().isEmpty()) {
             request.contentType(MediaType.APPLICATION_JSON).content(call.body());
+        }
+        return invoke(request, call.bearer());
+    }
+
+    Reply invoke(MockHttpServletRequestBuilder request, String bearer) throws Exception {
+        request.accept(MediaType.APPLICATION_JSON, MediaType.APPLICATION_PROBLEM_JSON);
+        if (!bearer.isEmpty()) {
+            request.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer);
         }
         var response = mvc.perform(request).andReturn().getResponse();
         return new Reply(response.getStatus(), header(response.getHeader(HttpHeaders.LOCATION)),

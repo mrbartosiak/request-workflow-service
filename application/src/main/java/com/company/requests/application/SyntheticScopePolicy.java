@@ -90,6 +90,7 @@ public final class SyntheticScopePolicy {
             case KEY_ISSUE -> configured.keyIssue();
             case CREATE -> configured.create().contains(key.type().orElseThrow());
             case CREATE_RESULT -> configured.createResult().contains(key.type().orElseThrow());
+            default -> false; // Existing-request grants start closed and require an ordered local enablement.
         };
     }
 

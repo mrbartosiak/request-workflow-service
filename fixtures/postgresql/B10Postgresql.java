@@ -73,7 +73,7 @@ public final class B10Postgresql {
     static final OrganizationId ORG = new OrganizationId("b10-local");
     static final OrganizationId OTHER = new OrganizationId("b10-other");
     static final AuthenticatedActor OWNER = actor(ORG, "original", "person-origin");
-    private static final AuthenticatedActor ASSIGNEE = actor(ORG, "assignee", "person-assignee-東京");
+    static final AuthenticatedActor ASSIGNEE = actor(ORG, "assignee", "person-assignee-東京");
     static final AuthenticatedActor OPERATOR = actor(ORG, "scope-operator", "person-operator");
     private static final AuthenticatedActor ASSIGNER = actor(ORG, "assignment-operator", "person-assigner");
     private static final AuthenticatedActor FOREIGN = actor(OTHER, "original", "person-origin");

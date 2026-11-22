@@ -1,6 +1,7 @@
 package com.company.requests.application;
 
 import com.company.requests.application.ScopeAuthorityChange.Entry;
+import com.company.requests.domain.Action;
 import com.company.requests.domain.PersonId;
 import com.company.requests.domain.RequestRef;
 import com.company.requests.domain.RequestType;
@@ -10,7 +11,19 @@ import java.util.Set;
 
 /** Local authority state accessed on the transaction holding the organization guard. */
 public interface EffectiveScopeStore {
-    enum Grant { KEY_ISSUE, CREATE, CREATE_RESULT }
+    enum Grant {
+        KEY_ISSUE, CREATE, CREATE_RESULT, ROW_READ, FIELD_READ_BODY, FIELD_READ_NAME,
+        CONTEXT_EDIT, CONTEXT_VERIFY, CONTEXT_ACCEPT, CONTEXT_REJECT, CONTEXT_DELETE, CONTEXT_PUBLISH,
+        EXECUTE_EDIT, EXECUTE_VERIFY, EXECUTE_ACCEPT, EXECUTE_REJECT, EXECUTE_DELETE, EXECUTE_PUBLISH;
+
+        public static Grant context(Action action) {
+            return valueOf("CONTEXT_" + action.name());
+        }
+
+        public static Grant execute(Action action) {
+            return valueOf("EXECUTE_" + action.name());
+        }
+    }
 
     enum Field { REF, ACTION, RESULT_REVISION, STATE, NAME, BODY }
 

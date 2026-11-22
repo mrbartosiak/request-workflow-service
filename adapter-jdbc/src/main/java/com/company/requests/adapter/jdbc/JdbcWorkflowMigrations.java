@@ -14,7 +14,7 @@ public final class JdbcWorkflowMigrations {
             "db/workflow/V003__create_claim_and_assignment.sql",
             "db/workflow/V004__scope_authority_witness.sql",
             "db/workflow/V005__scope_authority_projection.sql",
-            "db/workflow/V006__effective_scope_access.sql");
+            "db/workflow/V006__effective_scope_access.sql", "db/workflow/V007__action_context_grants.sql");
 
     private final JdbcTransactionRunner runner;
     private final JdbcTemplate jdbc;
@@ -41,6 +41,11 @@ public final class JdbcWorkflowMigrations {
     /** Explicitly installs mutable synthetic grants and visibility facts. */
     public void migrateEffectiveScopeAccess() {
         migrateThrough(6);
+    }
+
+    /** Enables independently managed existing-request context, execution and material field grants. */
+    public void migrateActionContext() {
+        migrateThrough(7);
     }
 
     void migrateThrough(int targetVersion) {
