@@ -89,7 +89,8 @@ public final class CreateCommand {
                 }
             }
             return resolve(actor, key, intent, admission, encode, started);
-        } catch (CommitOutcomeUnknownException | TransactionBusyException | ExecutionWindowClosed unavailable) {
+        } catch (CommitOutcomeUnknownException | TransactionBusyException | TransactionResourceUnavailableException
+                 | ExecutionWindowClosed unavailable) {
             return Rejection.OUTCOME_UNKNOWN;
         }
     }
@@ -136,8 +137,11 @@ public final class CreateCommand {
         var foundTrusted = new boolean[1];
         GuardedRelease.Outcome outcome = release.handoffCreate(actor, intent.type(), () -> {
             lineage.requireCurrent(admission);
+            if (!keys.isFresh(key)) {
+                return false;
+            }
             requireBudget(started);
-            return keys.isFresh(key);
+            return true;
         }, () -> {
             var receipt = receipts.find(key.receiptKey()).filter(value -> value.key().equals(key.receiptKey())
                     && value.keyGeneration() == key.generation() && value.expiresAt().equals(key.expiresAt()));

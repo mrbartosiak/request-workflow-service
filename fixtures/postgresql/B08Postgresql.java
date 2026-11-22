@@ -95,6 +95,7 @@ public final class B08Postgresql {
                     check.claimAndGuardOrder(mvc);
                     check.pastGeneration(mvc);
                     check.unprovedCommitResolution(mvc);
+                    check.lostResolutionSession(mvc);
                     check.expiryDuringPreparation(mvc);
                     check.restartedWriter(mvc);
                 }
@@ -240,9 +241,10 @@ public final class B08Postgresql {
         String concealed = issue(mvc, owner());
         problem(mvc.invoke(B08MvcSession.Call.create(owner(), concealed, SECRET_TYPE)), 404, "not_found");
         problem(mvc.invoke(B08MvcSession.Call.create(owner(), concealed, CREATE)), 404, "not_found");
+        expiryAtCut(mvc, concealed, trace.beforeTargetRead);
         expectCount(3);
         require(preparation == preparations(), "concealment must append nothing");
-        System.out.println("PASS fresh exact keys, byte-level conflict, actor alias, and changed intent with concealed original");
+        System.out.println("PASS fresh exact keys, exact conflict, actor alias, and expiry during a concealed original read");
     }
 
     private void preLookupClosures(B08MvcSession mvc) throws Exception {
@@ -271,8 +273,9 @@ public final class B08Postgresql {
             clock.set(NOW);
         }
         require(trace.claims.get() == 0 && trace.lookups.get() == 1, "admission-margin keys may only look up");
+        expiryAtCut(mvc, key, trace.beforeReceiptRead);
         expectCount(3);
-        System.out.println("PASS expiry and missing genesis/epoch/certificate with zero claims/reads; admission margin lookup only");
+        System.out.println("PASS expiry before lookup and during absent active-key read, with zero claims; missing proof had zero reads");
     }
 
     private void knownRollback(B08MvcSession mvc) throws Exception {
@@ -313,6 +316,8 @@ public final class B08Postgresql {
         try {
             problem(mvc.invoke(B08MvcSession.Call.create(owner(), key, CREATE)), 503, "outcome_unknown");
             expectCount(6);
+            expiryAtCut(mvc, key, trace.beforePreparation);
+            expectCount(6);
             require(preparations() == preparations, "refused proof must leave the committed effect unpublished");
         } finally {
             proofAdmin.execute("GRANT INSERT ON request_authority.release_prepared TO b04_proof");
@@ -327,7 +332,7 @@ public final class B08Postgresql {
         expectCount(6);
         require(trace.beforePreparation.get() == null && preparations() == preparations + 1,
                 "replay must prepare under the shared guard once");
-        System.out.println("PASS postcommit withheld response, current guarded replay, shared lock through independent proof and unlock before return");
+        System.out.println("PASS failed preparation yields to expiry; guarded replay holds share lock through proof and unlocks before return");
     }
 
     private void claimAndGuardOrder(B08MvcSession mvc) throws Exception {
@@ -390,8 +395,26 @@ public final class B08Postgresql {
                 && absent.cache().equals(present.cache()), "past-generation presence changed the public result");
         require(trace.claims.get() == 0 && trace.lookups.get() == 2 && trace.exclusive.get() == 0,
                 "past keys must use guarded lookup only");
+        expiryAtCut(mvc, absentKey.key(), trace.beforeReceiptRead);
+        expiryAtCut(mvc, storedKey.key(), trace.beforeReceiptRead);
         require(count("request") == 7 && count("operation_receipt") == 8, "past generation wrote a new effect");
-        System.out.println("PASS past-generation absent and unproved present receipt both fenced with 0 claims and 2 guarded reads");
+        System.out.println("PASS past-generation absent and unproved present receipts fenced before cutoff and expired during read");
+    }
+
+    private void expiryAtCut(B08MvcSession mvc, String key, AtomicReference<Cut> cut) throws Exception {
+        Instant prior = clock.get();
+        Instant cutoff = NOW.plus(OperationKeyIssuer.VALIDITY);
+        trace.clear();
+        clock.set(cutoff.minusSeconds(2));
+        cut.set(() -> clock.set(cutoff));
+        try {
+            problem(mvc.invoke(B08MvcSession.Call.create(owner(), key, CREATE)), 409, "key_expired");
+            require(cut.get() == null && trace.claims.get() == 0 && trace.lookups.get() == 1,
+                    "expiry cut must enter once after admission with one lookup and zero claims");
+        } finally {
+            cut.set(null);
+            clock.set(prior);
+        }
     }
 
     private void restartedWriter(B08MvcSession mvc) throws Exception {
@@ -402,12 +425,12 @@ public final class B08Postgresql {
         problem(mvc.invoke(B08MvcSession.Call.issue(owner())), 503, "authority_unavailable");
         require(trace.claims.get() == 0 && trace.lookups.get() == 0, "restarted writer bypassed live lineage certificate");
         for (String table : LOCAL) {
-            long expected = table.equals("operation_receipt") ? 10 : 9;
+            long expected = table.equals("operation_receipt") ? 11 : 10;
             require(count(table) == expected, "restarted writer changed " + table);
         }
         expectNoTentativeClaims();
-        require(reservations() == 11 && preparations() == 10, "final reservation/preparation counts disagree with the cuts");
-        System.out.println("PASS uncertified PostgreSQL restart closes before lookup; 9 effects, 11 reservations, 10 preparations, 0 pending claims");
+        require(reservations() == 12 && preparations() == 12, "final reservation/preparation counts disagree with the cuts");
+        System.out.println("PASS uncertified PostgreSQL restart closes before lookup; 10 effects, 12 reservations, 12 preparations, 0 pending claims");
     }
 
     private void unprovedCommitResolution(B08MvcSession mvc) throws Exception {
@@ -429,12 +452,58 @@ public final class B08Postgresql {
         System.out.println("PASS unknown commit fenced before lookup when certificate is lost and recovered by same-key replay");
     }
 
+    private void lostResolutionSession(B08MvcSession mvc) throws Exception {
+        String key = issue(mvc, owner());
+        long previousReservations = reservations();
+        long previousPreparations = preparations();
+        var killedBackend = new AtomicInteger();
+        trace.clear();
+        trace.inject.set(Fault.LOST_COMMIT_REPLY);
+        trace.receiptConnectionCut.set(connection -> killedBackend.set(terminateOwnedBackend(connection)));
+        problem(mvc.invoke(B08MvcSession.Call.create(owner(), key, CREATE)), 503, "outcome_unknown");
+        require(killedBackend.get() > 0 && trace.receiptConnectionCut.get() == null
+                && trace.claims.get() == 1 && trace.lookups.get() == 1,
+                "lost resolution session did not reach the fresh guarded receipt read");
+        require(count("request") == 9 && reservations() == previousReservations + 1
+                && preparations() == previousPreparations, "session loss changed a known commit or prepared an output");
+        created(mvc.invoke(B08MvcSession.Call.create(owner(), key, CREATE)));
+        require(count("request") == 9 && reservations() == previousReservations + 1
+                && preparations() == previousPreparations + 1, "certified retry must recover the single committed effect");
+        trace.receiptConnectionCut.set(connection -> {
+            throw new SQLException("Synthetic unexpected receipt fault", "XX000");
+        });
+        problem(mvc.invoke(B08MvcSession.Call.create(owner(), key, CREATE)), 500, "internal_error");
+        require(trace.receiptConnectionCut.get() == null && count("request") == 9
+                && preparations() == previousPreparations + 1, "unexpected receipt fault must leave the commit intact");
+        var guardBackend = new AtomicInteger();
+        trace.guardRecheckConnectionCut.set(connection -> guardBackend.set(terminateOwnedBackend(connection)));
+        problem(mvc.invoke(B08MvcSession.Call.create(owner(), key, CREATE)), 503, "outcome_unknown");
+        require(guardBackend.get() > 0 && trace.guardRecheckConnectionCut.get() == null
+                && count("request") == 9 && reservations() == previousReservations + 1
+                && preparations() == previousPreparations + 2, "lost final guard preserves preparation and withholds output");
+        System.out.printf("PASS owned receipt-read and final-guard session loss pid=%d and pid=%d return outcome_unknown; one committed effect%n",
+                killedBackend.get(), guardBackend.get());
+    }
+
+    private int terminateOwnedBackend(Connection connection) throws SQLException {
+        int backend;
+        try (var session = connection.createStatement();
+             var row = session.executeQuery("SELECT pg_backend_pid()")) {
+            require(row.next(), "resolution connection lacks an owned PostgreSQL PID");
+            backend = row.getInt(1);
+        }
+        require(Boolean.TRUE.equals(workflowAdmin.queryForObject(
+                "SELECT pg_terminate_backend(?, 1000)", Boolean.class, backend)),
+                "resolution cut must stop the exact fixture session");
+        return backend;
+    }
+
     private void expiryDuringPreparation(B08MvcSession mvc) throws Exception {
         String key = issue(mvc, owner());
         long previousPreparations = preparations();
         trace.beforePreparation.set(() -> clock.set(NOW.plus(OperationKeyIssuer.VALIDITY)));
         problem(mvc.invoke(B08MvcSession.Call.create(owner(), key, CREATE)), 409, "key_expired");
-        require(trace.beforePreparation.get() == null && count("request") == 9
+        require(trace.beforePreparation.get() == null && count("request") == 10
                 && preparations() == previousPreparations + 1, "prepared expiry must keep effect/preparation and withhold bytes");
         trace.clear();
         problem(mvc.invoke(B08MvcSession.Call.create(owner(), key, CREATE)), 409, "key_expired");
@@ -577,14 +646,23 @@ public final class B08Postgresql {
         void atBoundary() throws Exception;
     }
 
+    @FunctionalInterface
+    private interface ConnectionCut {
+        void atBoundary(Connection connection) throws Exception;
+    }
+
     private static final class Trace {
         private final AtomicInteger claims = new AtomicInteger();
         private final AtomicInteger lookups = new AtomicInteger();
         private final AtomicInteger exclusive = new AtomicInteger();
         private final AtomicReference<Fault> inject = new AtomicReference<>(Fault.NONE);
         private final AtomicReference<Cut> beforeExclusive = new AtomicReference<>();
+        private final AtomicReference<Cut> beforeReceiptRead = new AtomicReference<>();
+        private final AtomicReference<Cut> beforeTargetRead = new AtomicReference<>();
         private final AtomicReference<Cut> beforePreparation = new AtomicReference<>();
         private final AtomicReference<Cut> afterCommit = new AtomicReference<>();
+        private final AtomicReference<ConnectionCut> receiptConnectionCut = new AtomicReference<>();
+        private final AtomicReference<ConnectionCut> guardRecheckConnectionCut = new AtomicReference<>();
 
         private void clear() {
             claims.set(0);
@@ -606,9 +684,15 @@ public final class B08Postgresql {
                         claims.incrementAndGet();
                     } else if (sql.contains("SELECT intent_digest_version")) {
                         lookups.incrementAndGet();
+                        enter(beforeReceiptRead);
+                        enter(receiptConnectionCut, raw);
+                    } else if (sql.contains("SELECT request_type, originating_person_id")) {
+                        enter(beforeTargetRead);
                     } else if (sql.contains("FROM requests.policy_guard") && sql.contains("FOR UPDATE")) {
                         exclusive.incrementAndGet();
                         enter(beforeExclusive);
+                    } else if (sql.contains("FROM requests.policy_guard") && !sql.contains("FOR SHARE")) {
+                        enter(guardRecheckConnectionCut, raw);
                     } else if (sql.contains("UPDATE requests.operation_receipt")) {
                         if (inject.compareAndSet(Fault.FAIL_FINALIZE, Fault.NONE)) {
                             throw new SQLException("Synthetic precommit finalization failure", "XX000");
@@ -640,6 +724,13 @@ public final class B08Postgresql {
             Cut cut = point.getAndSet(null);
             if (cut != null) {
                 cut.atBoundary();
+            }
+        }
+
+        private static void enter(AtomicReference<ConnectionCut> point, Connection connection) throws Exception {
+            ConnectionCut cut = point.getAndSet(null);
+            if (cut != null) {
+                cut.atBoundary(connection);
             }
         }
     }

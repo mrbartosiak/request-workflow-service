@@ -3,11 +3,14 @@ package com.company.requests.adapter.jdbc;
 import com.company.requests.application.AuthorityUnavailableException;
 import com.company.requests.application.CommitOutcomeUnknownException;
 import com.company.requests.application.TransactionBusyException;
+import com.company.requests.application.TransactionResourceUnavailableException;
 import com.company.requests.application.TransactionRunner;
 import java.sql.SQLException;
 import java.util.Objects;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -15,6 +18,7 @@ import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -90,6 +94,33 @@ public final class JdbcTransactionRunner implements TransactionRunner {
             }
             throw failure;
         }
+    }
+
+    @Override
+    public <T> T runGuardedRelease(Supplier<T> work) {
+        try {
+            return run(work);
+        } catch (RuntimeException failure) {
+            if (bounded && isResourceFailure(failure)) {
+                throw new TransactionResourceUnavailableException(failure);
+            }
+            throw failure;
+        }
+    }
+
+    private static boolean isResourceFailure(RuntimeException failure) {
+        if (failure instanceof DataAccessResourceFailureException) {
+            return true;
+        }
+        if (failure instanceof DataAccessException || failure instanceof TransactionSystemException) {
+            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+                if (cause instanceof SQLException sql && sql.getSQLState() != null
+                        && sql.getSQLState().startsWith("08")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean isWaitFailure(RuntimeException failure) {

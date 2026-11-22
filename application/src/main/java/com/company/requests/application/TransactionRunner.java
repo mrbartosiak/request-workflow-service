@@ -12,4 +12,9 @@ public interface TransactionRunner {
      * @throws IllegalStateException if invoked within an existing transaction
      */
     <T> T run(Supplier<T> work);
+
+    /** Owns the guarded release transaction and permits a specific resource-failure classification. */
+    default <T> T runGuardedRelease(Supplier<T> work) {
+        return run(work);
+    }
 }
