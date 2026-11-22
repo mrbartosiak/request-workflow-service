@@ -4,6 +4,7 @@ import com.company.requests.application.AuthenticatedActor;
 import com.company.requests.application.WriterEpoch;
 import com.company.requests.integration.DispatchStore.Claim;
 import com.company.requests.integration.DispatchStore.Invocation;
+import java.time.Duration;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.Optional;
@@ -29,6 +30,10 @@ public final class SyntheticDelivery {
     public interface Connector {
         Optional<Evidence> send(Invocation invocation);
 
+        default SendResult sendWithThrottle(Invocation invocation) {
+            return new SendResult(send(invocation), Optional.empty());
+        }
+
         /** The endpoint obtains an authoritative snapshot after any requested fence. */
         Optional<Evidence> lookup(Invocation invocation, boolean fence);
     }
@@ -36,10 +41,32 @@ public final class SyntheticDelivery {
     public interface Store extends DispatchStore {
         Optional<Disposition> finishDelivery(Claim claim, Optional<Evidence> evidence);
 
+        default Optional<Disposition> finishDelivery(Claim claim, SendResult result) {
+            return finishDelivery(claim, result.evidence());
+        }
+
         Optional<Recovery> startRecovery(WriterEpoch writer, AuthenticatedActor actor, DispatchStore.AttemptId attempt,
                                          Action action);
 
         boolean finishRecovery(Recovery recovery, Optional<Evidence> evidence);
+    }
+
+    /** An optional Retry-After hint from the same configured connector and observation. */
+    public record SendResult(Optional<Evidence> evidence, Optional<Duration> retryAfter) {
+        public SendResult {
+            Objects.requireNonNull(evidence);
+            Objects.requireNonNull(retryAfter);
+            retryAfter.ifPresent(delay -> {
+                if (delay.compareTo(Duration.ofMillis(1)) < 0) {
+                    throw new IllegalArgumentException("A throttle hint must establish a positive delay.");
+                }
+                delay.toMillis();
+            });
+        }
+
+        public static SendResult unknown() {
+            return new SendResult(Optional.empty(), Optional.empty());
+        }
     }
 
     public record Recovery(UUID id, WriterEpoch writer, AuthenticatedActor actor, Invocation invocation, Action action) {

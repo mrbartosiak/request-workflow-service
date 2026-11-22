@@ -9,8 +9,10 @@ import com.company.requests.integration.SyntheticDelivery.Evidence;
 import com.company.requests.integration.SyntheticDelivery.Exclusion;
 import com.company.requests.integration.SyntheticDelivery.NoApplication;
 import com.company.requests.integration.SyntheticDelivery.Observation;
+import com.company.requests.integration.SyntheticDelivery.SendResult;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -39,11 +41,20 @@ public final class JdbcSyntheticConnector implements Connector {
     private final TransactionTemplate transactions;
     private final Map<String, Contract> contracts;
     private final UUID endpoint;
+    private final Duration deadline;
 
     public JdbcSyntheticConnector(DataSource remote, Map<String, Contract> contracts) {
+        this(remote, contracts, null);
+    }
+
+    public JdbcSyntheticConnector(DataSource remote, Map<String, Contract> contracts, Duration deadline) {
         this.remote = Objects.requireNonNull(remote);
         jdbc = new NamedParameterJdbcTemplate(remote);
         transactions = new TransactionTemplate(new JdbcTransactionManager(remote));
+        if (deadline != null) {
+            transactions.setTimeout(Math.toIntExact(deadline.toSeconds()));
+        }
+        this.deadline = deadline;
         this.contracts = Map.copyOf(contracts);
         endpoint = transaction(this::currentEndpoint);
     }
@@ -78,6 +89,13 @@ public final class JdbcSyntheticConnector implements Connector {
             }
             return observe(invocation, key);
         });
+    }
+
+    /** The trusted fake endpoint may attach its configured retry delay to a transient reply. */
+    public SendResult throttle(Invocation invocation, Duration retryAfter) {
+        var evidence = send(invocation, Send.THROTTLE);
+        return new SendResult(evidence, evidence.filter(value -> value.observation() == Observation.TRANSIENT)
+                .map(value -> retryAfter));
     }
 
     /** Completes a persisted async acceptance, honoring the same fence and dedupe as a new arrival. */
@@ -281,6 +299,10 @@ public final class JdbcSyntheticConnector implements Connector {
             throw new IllegalStateException("Synthetic remote I/O requires a separate transaction boundary.");
         }
         return transactions.execute(status -> {
+            if (deadline != null) {
+                jdbc.getJdbcOperations().queryForObject("SELECT set_config('transaction_timeout', ?, true)",
+                        String.class, Long.toString(deadline.toMillis()));
+            }
             jdbc.getJdbcOperations().execute("SET LOCAL synchronous_commit = on");
             return work.get();
         });

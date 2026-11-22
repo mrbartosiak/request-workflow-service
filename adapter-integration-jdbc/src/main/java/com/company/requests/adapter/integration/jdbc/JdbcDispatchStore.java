@@ -10,20 +10,29 @@ import com.company.requests.application.TransactionRunner;
 import com.company.requests.application.WriterEpoch;
 import com.company.requests.domain.OrganizationId;
 import com.company.requests.domain.RequestRef;
+import com.company.requests.integration.DispatchCoordinator;
+import com.company.requests.integration.DispatchCoordinator.Result;
+import com.company.requests.integration.DispatchScheduler;
 import com.company.requests.integration.SyntheticDelivery;
 import com.company.requests.integration.SyntheticDelivery.Action;
+import com.company.requests.integration.SyntheticDelivery.Connector;
 import com.company.requests.integration.SyntheticDelivery.Disposition;
 import com.company.requests.integration.SyntheticDelivery.Evidence;
 import com.company.requests.integration.SyntheticDelivery.Exclusion;
+import com.company.requests.integration.SyntheticDelivery.Observation;
 import com.company.requests.integration.SyntheticDelivery.Recovery;
+import com.company.requests.integration.SyntheticDelivery.SendResult;
+import com.company.requests.integration.TimedSyntheticDelivery;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -41,7 +50,7 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
             JOIN requests.outbox_attempt a ON a.destination = o.destination AND a.tenant = o.tenant
                 AND a.effect_id = o.effect_id AND a.attempt_no = o.last_attempt_no
             """;
-    private static final String NO_BLOCKING_PREDECESSOR = """
+    static final String NO_BLOCKING_PREDECESSOR = """
             NOT EXISTS (
                 SELECT 1 FROM requests.outbox p
                 WHERE p.destination = o.destination AND p.tenant = o.tenant AND p.request_ref = o.request_ref
@@ -83,6 +92,8 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
     private final Set<String> syntheticRoutes;
     private final UUID endpoint;
     private final String routes;
+    private final JdbcDispatchScheduling scheduling;
+    private final OrganizationId scheduledTenant;
 
     public JdbcDispatchStore(DataSource workerSource, TransactionRunner transactions, GuardedAccess access,
                              Duration lease, Duration deferral) {
@@ -91,6 +102,12 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
 
     public JdbcDispatchStore(DataSource workerSource, TransactionRunner transactions, GuardedAccess access,
                              Duration lease, Duration deferral, Set<String> syntheticRoutes, UUID endpoint) {
+        this(workerSource, transactions, access, lease, deferral, syntheticRoutes, endpoint, null);
+    }
+
+    public JdbcDispatchStore(DataSource workerSource, TransactionRunner transactions, GuardedAccess access,
+                             Duration lease, Duration deferral, Set<String> syntheticRoutes, UUID endpoint,
+                             OrganizationId scheduledTenant) {
         this.workerSource = Objects.requireNonNull(workerSource);
         jdbc = new NamedParameterJdbcTemplate(workerSource);
         this.transactions = Objects.requireNonNull(transactions);
@@ -102,14 +119,98 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
             throw new IllegalArgumentException("Synthetic dispatch routes require an exact endpoint identity.");
         }
         this.endpoint = endpoint;
+        this.scheduledTenant = scheduledTenant;
+        scheduling = scheduledTenant == null ? null : new JdbcDispatchScheduling((DispatchWorkerConnections) workerSource,
+                scheduledTenant, syntheticRoutes, endpoint);
         routes = this.syntheticRoutes.isEmpty() ? "" : """
                   AND o.destination IN (:routes) AND (o.delivery_endpoint IS NULL OR o.delivery_endpoint = :endpoint)
-                """;
+                """ + (scheduling == null ? "" : " AND o.tenant = :scheduledTenant ");
+    }
+
+    public void enrollScheduledRoutes() {
+        scheduledSession(() -> transaction(() -> {
+            scheduling.enroll();
+            return null;
+        }));
+    }
+
+    public List<Claim> claimScheduledBatch(WriterEpoch writer) {
+        return claimScheduledBatch(writer, DispatchScheduler.BATCH_SIZE);
+    }
+
+    private List<Claim> claimScheduledBatch(WriterEpoch writer, int maximum) {
+        Objects.requireNonNull(writer);
+        return scheduledSession(() -> transaction(() -> {
+            recoverExpired();
+            return scheduling.claimBatch(writer, maximum, this::persistClaim);
+        }));
+    }
+
+    public Result dispatchScheduled(Claim claim, WriterEpoch writer, Connector connector) {
+        var unrecorded = new AtomicReference<UUID>();
+        try {
+            return scheduledSession(() -> scheduling.dispatch(claim,
+                    owner -> dispatchInvocation(claim, writer, connector, owner, unrecorded)));
+        } catch (RuntimeException | Error failure) {
+            var owner = unrecorded.get();
+            if (owner != null) {
+                // The old session can fail independently of the completed connector invocation.
+                try {
+                    scheduledSession(() -> recordQuiescence(claim, owner));
+                } catch (RuntimeException | Error reporting) {
+                    failure.addSuppressed(reporting);
+                }
+            }
+            throw failure;
+        }
+    }
+
+    private Result dispatchInvocation(Claim claim, WriterEpoch writer, Connector connector, UUID owner,
+                                      AtomicReference<UUID> unrecorded) {
+        var timed = new TimedSyntheticDelivery(connector);
+        Result result;
+        try {
+            result = new DispatchCoordinator(this, writer, timed).dispatch(claim);
+        } catch (RuntimeException | Error failure) {
+            try {
+                recordAfterClose(timed, claim, owner, unrecorded);
+            } catch (RuntimeException | Error reporting) {
+                failure.addSuppressed(reporting);
+            }
+            throw failure;
+        }
+        recordAfterClose(timed, claim, owner, unrecorded);
+        return result;
+    }
+
+    private void recordAfterClose(TimedSyntheticDelivery timed, Claim claim, UUID owner,
+                                  AtomicReference<UUID> unrecorded) {
+        timed.close();
+        unrecorded.set(owner);
+        recordQuiescence(claim, owner);
+        unrecorded.set(null);
+    }
+
+    private Void recordQuiescence(Claim claim, UUID owner) {
+        return transaction(() -> {
+            scheduling.recordQuiescence(claim, owner);
+            return null;
+        });
+    }
+
+    public <T> T scheduledSession(Supplier<T> work) {
+        if (scheduling == null) {
+            throw new IllegalStateException("Dispatch scheduling is not configured.");
+        }
+        return ((DispatchWorkerConnections) workerSource).inSession(work);
     }
 
     @Override
     public Optional<Claim> claim(WriterEpoch writer) {
         Objects.requireNonNull(writer);
+        if (scheduling != null) {
+            return claimScheduledBatch(writer, 1).stream().findFirst();
+        }
         return transaction(() -> {
             recoverExpired();
             var statuses = syntheticRoutes.isEmpty() ? "('READY')" : "('READY', 'RETRYABLE')";
@@ -130,12 +231,15 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
                     """, routeParams(new MapSqlParameterSource()),
                     (row, index) -> new Claim(new AttemptId(effectKey(row),
                     Math.incrementExact(row.getLong("last_attempt_no"))), UUID.randomUUID(), writer))
-                    .stream().findFirst().map(this::persistClaim);
+                    .stream().findFirst().map(claim -> persistClaim(claim, null));
         });
     }
 
     @Override
     public ArmResult arm(Claim claim) {
+        if (scheduling != null && !scheduling.hasPermit(claim)) {
+            return withheld(ArmState.STALE);
+        }
         return transaction(() -> {
             var guard = access.lock(claim.id().effect().tenant());
             return lockActive(claim, State.CLAIMED).map(effect -> guard.map(current -> arm(claim, current, effect))
@@ -171,6 +275,11 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
 
     @Override
     public Optional<Disposition> finishDelivery(Claim claim, Optional<Evidence> report) {
+        return finishDelivery(claim, new SendResult(report, Optional.empty()));
+    }
+
+    @Override
+    public Optional<Disposition> finishDelivery(Claim claim, SendResult report) {
         requireSynthetic();
         return transaction(() -> {
             var guard = access.lock(claim.id().effect().tenant());
@@ -192,7 +301,7 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
             try {
                 if (!effect.cancelled() && access.originalPublication(guard.orElseThrow(), admission, effect.obligation())
                         .filter(effect.publication()::equals).isPresent()) {
-                    evidence = qualified(invocation(claim.id(), effect.obligation()), report);
+                    evidence = qualified(invocation(claim.id(), effect.obligation()), report.evidence());
                 }
             } catch (AccessDeniedException | AuthorityUnavailableException revoked) {
                 // The invocation was authorized at arm. There is no current authority to accept its outcome.
@@ -207,6 +316,10 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
             }
             writeObservation(attemptParams(claim), evidence);
             updateRetryRisk(claim.id().effect(), result, exclusion);
+            if (scheduling != null && evidence.filter(value -> value.observation() == Observation.TRANSIENT)
+                    .isPresent()) {
+                report.retryAfter().ifPresent(delay -> scheduling.throttle(claim, delay));
+            }
             return Optional.of(result);
         });
     }
@@ -277,7 +390,7 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
                     """ + KEY, params.addValue("result", result.name()).addValue("confirmation", confirmation)));
             writeObservation(params, evidence);
             updateLockedEffect(effectParams(id.effect()).addValue("number", target.lastAttempt()),
-                    State.valueOf(result.name()), result == Disposition.RETRYABLE ? deferMillis : null);
+                    State.valueOf(result.name()), result == Disposition.RETRYABLE ? retryDelay() : null);
             updateRetryRisk(id.effect(), result, exclusion);
             closeRecovery(params, result.name(), proof);
             return true;
@@ -388,14 +501,18 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
         }
     }
 
-    private Claim persistClaim(Claim claim) {
+    private Claim persistClaim(Claim claim, Integer slot) {
         var params = attemptParams(claim).addValue("leaseMillis", leaseMillis);
+        var slotColumn = slot == null ? "" : ", scheduling_slot";
+        var slotValue = slot == null ? "" : ", :slot";
         requireOne(jdbc.update("""
                 INSERT INTO requests.outbox_attempt (destination, tenant, effect_id, attempt_no, claim_token,
-                    writer_id, generation, claimed_at, lease_expires_at, state)
+                    writer_id, generation, claimed_at, lease_expires_at, state
+                """ + slotColumn + """
+                    )
                 VALUES (:destination, :tenant, :effect, :number, :token, :writer, :generation, statement_timestamp(),
-                    statement_timestamp() + :leaseMillis * interval '1 millisecond', 'CLAIMED')
-                """, params));
+                    statement_timestamp() + :leaseMillis * interval '1 millisecond', 'CLAIMED'
+                """ + slotValue + ")", params.addValue("slot", slot)));
         var statuses = syntheticRoutes.isEmpty() ? "('READY')" : "('READY', 'RETRYABLE')";
         requireOne(jdbc.update("""
                 UPDATE requests.outbox SET status = 'CLAIMED', last_attempt_no = :number, deferred_until = NULL
@@ -414,8 +531,9 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
                   AND a.lease_expires_at <= clock_timestamp()
                 """ + routes + """
                 ORDER BY a.lease_expires_at, a.destination, a.tenant, a.effect_id
-                LIMIT 1 FOR UPDATE OF o SKIP LOCKED
-                """, routeParams(new MapSqlParameterSource()), (row, index) -> new Expired(
+                LIMIT :maximum FOR UPDATE OF o SKIP LOCKED
+                """, routeParams(new MapSqlParameterSource("maximum",
+                        scheduling == null ? 1 : DispatchScheduler.BATCH_SIZE)), (row, index) -> new Expired(
                 new Claim(new AttemptId(effectKey(row), row.getLong("attempt_no")),
                         row.getObject("claim_token", UUID.class),
                         new WriterEpoch(row.getObject("writer_id", UUID.class), row.getLong("generation"))),
@@ -462,11 +580,22 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
         if (proof.isEmpty()) {
             return withhold(claim, State.DEFERRED, ArmState.DEFERRED);
         }
+        // Keep the cooldown check and durable arm together after the independent authority reads.
+        if (scheduling != null && !scheduling.canArm(claim)) {
+            return withhold(claim, State.DEFERRED, ArmState.DEFERRED);
+        }
         var params = attemptParams(claim).addValue("version", guard.policyVersion())
                 .addValue("publicationAttempt", proof.orElseThrow());
+        var slotOwner = "";
+        if (scheduling != null) {
+            slotOwner = ", scheduling_invocation = :invocation";
+            params.addValue("invocation", scheduling.permitOwner(claim));
+        }
         if (jdbc.update("""
                 UPDATE requests.outbox_attempt SET state = 'ARMED', policy_version = :version,
                     publication_attempt = :publicationAttempt, armed_at = clock_timestamp()
+                """ + slotOwner + """
+
                 WHERE state = 'CLAIMED' AND lease_expires_at > clock_timestamp() AND
                 """ + ATTEMPT, params) != 1) {
             return withheld(ArmState.STALE);
@@ -505,14 +634,28 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
             case DEFERRED, EXPIRED_UNSENT -> State.READY;
             default -> result;
         };
-        updateLockedEffect(params, effectState, result == State.DEFERRED || result == State.RETRYABLE ? deferMillis : null);
+        Long delay = switch (result) {
+            case DEFERRED -> deferMillis;
+            case RETRYABLE -> retryDelay();
+            default -> null;
+        };
+        updateLockedEffect(params, effectState, delay);
         return true;
+    }
+
+    private long retryDelay() {
+        return scheduling == null ? deferMillis : scheduling.retryDelay();
     }
 
     private void updateLockedEffect(MapSqlParameterSource params, State effectState, Long defer) {
         params.addValue("effectState", effectState.name()).addValue("deferMillis", defer);
-        var status = !syntheticRoutes.isEmpty() && effectState == State.READY
-                ? "CASE WHEN retry_uncertain THEN 'RETRYABLE' ELSE :effectState END" : ":effectState";
+        var status = ":effectState";
+        if (!syntheticRoutes.isEmpty() && effectState == State.READY) {
+            var armedBefore = scheduling == null ? "" : """
+                     OR EXISTS (SELECT 1 FROM requests.outbox_attempt WHERE armed_at IS NOT NULL AND
+                    """ + KEY + ") ";
+            status = "CASE WHEN retry_uncertain" + armedBefore + " THEN 'RETRYABLE' ELSE :effectState END";
+        }
         requireOne(jdbc.update("""
                 UPDATE requests.outbox SET status =
                 """ + status + ",\n" + """
@@ -564,7 +707,8 @@ public final class JdbcDispatchStore implements SyntheticDelivery.Store {
     }
 
     private MapSqlParameterSource routeParams(MapSqlParameterSource params) {
-        return params.addValue("routes", syntheticRoutes).addValue("endpoint", endpoint);
+        return params.addValue("routes", syntheticRoutes).addValue("endpoint", endpoint)
+                .addValue("scheduledTenant", scheduledTenant == null ? null : scheduledTenant.value());
     }
 
     private static Invocation invocation(AttemptId id, OutboundObligation obligation) {

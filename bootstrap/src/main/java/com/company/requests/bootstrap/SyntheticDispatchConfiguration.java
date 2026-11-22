@@ -5,6 +5,7 @@ import com.company.requests.adapter.authority.JdbcPublicationJournal;
 import com.company.requests.adapter.authority.JdbcScopeAuthorityJournal;
 import com.company.requests.adapter.integration.jdbc.JdbcDispatchStore;
 import com.company.requests.adapter.integration.jdbc.JdbcSyntheticConnector;
+import com.company.requests.adapter.integration.jdbc.DispatchWorkerConnections;
 import com.company.requests.adapter.jdbc.JdbcEffectiveScopeStore;
 import com.company.requests.adapter.jdbc.JdbcPublicationConfirmationStore;
 import com.company.requests.adapter.jdbc.JdbcTransactionRunner;
@@ -21,9 +22,13 @@ import com.company.requests.domain.OrganizationId;
 import com.company.requests.domain.RequestType;
 import com.company.requests.integration.DispatchCoordinator;
 import com.company.requests.integration.DispatchCoordinator.SyntheticRecorder;
+import com.company.requests.integration.DispatchScheduler;
 import com.company.requests.integration.DispatchStore;
+import com.company.requests.integration.DispatchStore.AttemptId;
 import com.company.requests.integration.DeliveryReconciler;
 import com.company.requests.integration.SyntheticDelivery;
+import com.company.requests.integration.SyntheticDelivery.Connector;
+import com.company.requests.integration.TimedSyntheticDelivery;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
@@ -33,6 +38,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import javax.sql.ConnectionPoolDataSource;
 import javax.sql.DataSource;
 
 /** Explicit opt-in composition for the local synthetic worker. */
@@ -54,10 +62,47 @@ public final class SyntheticDispatchConfiguration {
     public record DeliveryComponents(SyntheticDelivery.Store store, DispatchCoordinator coordinator,
                                      DeliveryReconciler reconciler, JdbcSyntheticConnector connector) { }
 
+    public static final class ScheduledWorker implements AutoCloseable {
+        private final DispatchWorkerConnections connections;
+        private final JdbcDispatchStore store;
+        private final com.company.requests.application.WriterEpoch writer;
+        private final Connector connector;
+        private final DispatchScheduler scheduler;
+
+        private ScheduledWorker(DispatchWorkerConnections connections, JdbcDispatchStore store,
+                                com.company.requests.application.WriterEpoch writer, Connector connector) {
+            this.connections = connections;
+            this.store = store;
+            this.writer = writer;
+            this.connector = connector;
+            scheduler = new DispatchScheduler(() -> store.claimScheduledBatch(writer), claim ->
+                    store.dispatchScheduled(claim, writer, connector));
+        }
+
+        public DispatchScheduler.Snapshot snapshot() {
+            return scheduler.snapshot();
+        }
+
+        public DeliveryReconciler.Result recover(AuthenticatedActor operator, AttemptId attempt,
+                                                  SyntheticDelivery.Action action) {
+            return store.scheduledSession(() -> {
+                try (var timed = new TimedSyntheticDelivery(connector)) {
+                    return new DeliveryReconciler(store, writer, timed).recover(operator, attempt, action);
+                }
+            });
+        }
+
+        @Override
+        public void close() {
+            scheduler.close();
+            connections.close();
+        }
+    }
+
     public static Components worker(SyntheticEffectiveAccessConfiguration.Settings settings, DataSource workerDataSource,
                                     DataSource authorityReader, Collection<Route> routes, Duration lease, Duration defer,
                                     SyntheticRecorder recorder) {
-        var store = configuredStore(settings, workerDataSource, authorityReader, routes, lease, defer, null);
+        var store = configuredStore(settings, workerDataSource, authorityReader, routes, lease, defer, null, null);
         return new Components(store, new DispatchCoordinator(store, settings.create().writer(), recorder));
     }
 
@@ -65,23 +110,59 @@ public final class SyntheticDispatchConfiguration {
                                                      DataSource workerDataSource, DataSource authorityReader,
                                                      DataSource remote, Collection<Route> routes, Duration lease,
                                                      Duration defer, Map<String, SyntheticDelivery.Contract> contracts) {
-        if (remote == workerDataSource || remote == authorityReader || remote == settings.create().command()
-                || contracts.isEmpty() || !contracts.keySet().equals(routes.stream().map(Route::destination)
-                        .collect(java.util.stream.Collectors.toUnmodifiableSet()))) {
-            throw new IllegalArgumentException("Synthetic delivery requires its own remote source and exact route contracts.");
-        }
+        checkRemote(settings, workerDataSource, authorityReader, remote, routes, contracts);
         var writer = settings.create().writer();
         var connector = new JdbcSyntheticConnector(remote, contracts);
         var store = configuredStore(settings, workerDataSource, authorityReader, routes, lease, defer,
-                connector.endpoint());
+                connector.endpoint(), null);
         return new DeliveryComponents(store, new DispatchCoordinator(store, writer, connector),
                 new DeliveryReconciler(store, writer, connector), connector);
+    }
+
+    public static ScheduledWorker scheduledWorker(SyntheticEffectiveAccessConfiguration.Settings settings,
+                                                  ConnectionPoolDataSource worker, DataSource authorityReader,
+                                                  DataSource remote, Collection<Route> routes,
+                                                  Map<String, SyntheticDelivery.Contract> contracts) {
+        return scheduledWorker(settings, worker, authorityReader, remote, routes, contracts, connector -> connector);
+    }
+
+    static ScheduledWorker scheduledWorker(SyntheticEffectiveAccessConfiguration.Settings settings,
+                                           ConnectionPoolDataSource worker, DataSource authorityReader,
+                                           DataSource remote, Collection<Route> routes,
+                                           Map<String, SyntheticDelivery.Contract> contracts,
+                                           Function<JdbcSyntheticConnector, Connector> fixtureControl) {
+        if (worker == authorityReader || worker == settings.create().command()) {
+            throw new IllegalArgumentException("Scheduled delivery requires a dedicated worker connection pool.");
+        }
+        checkRemote(settings, worker, authorityReader, remote, routes, contracts);
+        var connector = new JdbcSyntheticConnector(remote, contracts, DispatchScheduler.IO_TIMEOUT);
+        var connections = new DispatchWorkerConnections(worker);
+        try {
+            var store = configuredStore(settings, connections, authorityReader, routes, DispatchScheduler.LEASE,
+                    DispatchScheduler.MIN_JITTER, connector.endpoint(), settings.effectivePolicy().genesis().organization());
+            store.enrollScheduledRoutes();
+            return new ScheduledWorker(connections, store, settings.create().writer(),
+                    Objects.requireNonNull(fixtureControl.apply(connector)));
+        } catch (RuntimeException failure) {
+            connections.close();
+            throw failure;
+        }
+    }
+
+    private static void checkRemote(SyntheticEffectiveAccessConfiguration.Settings settings, Object worker,
+                                    DataSource authorityReader, DataSource remote, Collection<Route> routes,
+                                    Map<String, SyntheticDelivery.Contract> contracts) {
+        if (remote == worker || remote == authorityReader || remote == settings.create().command()
+                || contracts.isEmpty() || !contracts.keySet().equals(routes.stream().map(Route::destination)
+                        .collect(Collectors.toUnmodifiableSet()))) {
+            throw new IllegalArgumentException("Synthetic delivery requires its own remote source and exact route contracts.");
+        }
     }
 
     private static JdbcDispatchStore configuredStore(SyntheticEffectiveAccessConfiguration.Settings settings,
                                                      DataSource workerDataSource, DataSource authorityReader,
                                                      Collection<Route> routes, Duration lease, Duration defer,
-                                                     UUID endpoint) {
+                                                     UUID endpoint, OrganizationId scheduledTenant) {
         if (!settings.publicationEnabled() || workerDataSource == settings.create().command()
                 || authorityReader == workerDataSource || authorityReader == settings.create().command()) {
             throw new IllegalArgumentException("Dispatch requires an enabled publication profile and separate data sources.");
@@ -132,6 +213,6 @@ public final class SyntheticDispatchConfiguration {
                 return Optional.ofNullable(byDestination.get(obligation.destination())).flatMap(route ->
                         access.confirmedDispatchPublication(guard, admission, operator, route.type(), obligation));
             }
-        }, lease, defer, endpoint == null ? Set.of() : byDestination.keySet(), endpoint);
+        }, lease, defer, endpoint == null ? Set.of() : byDestination.keySet(), endpoint, scheduledTenant);
     }
 }

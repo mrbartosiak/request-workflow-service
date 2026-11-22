@@ -78,13 +78,15 @@ public final class DispatchCoordinator {
 
     private static Result send(SyntheticDelivery.Store store, SyntheticDelivery.Connector connector, Claim claim,
                                Invocation invocation) {
-        Optional<SyntheticDelivery.Evidence> evidence;
+        SyntheticDelivery.SendResult report;
         try {
-            evidence = SyntheticDelivery.exact(invocation, connector.send(invocation));
+            var delivery = connector.sendWithThrottle(invocation);
+            report = new SyntheticDelivery.SendResult(SyntheticDelivery.exact(invocation, delivery.evidence()),
+                    delivery.retryAfter());
         } catch (RuntimeException ambiguous) {
-            evidence = Optional.empty();
+            report = SyntheticDelivery.SendResult.unknown();
         }
-        return store.finishDelivery(claim, evidence)
+        return store.finishDelivery(claim, report)
                 .map(disposition -> Result.valueOf(disposition.name())).orElse(Result.STALE);
     }
 }
