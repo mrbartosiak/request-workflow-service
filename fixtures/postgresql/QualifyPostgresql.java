@@ -165,6 +165,82 @@ public final class QualifyPostgresql {
         Connection open() throws SQLException;
     }
 
+    /** Run a two-cluster check with independently restricted runtime and observer identities. */
+    static void workflowAndProof(String[] args, WorkflowAndProofCheck check) throws Exception {
+        require(args.length == 4 && List.of("run", "cleanup").contains(args[0]),
+                "Usage: run|cleanup BIN RUNS_DIRECTORY b06-RUN_ID");
+        require(args[3].matches("b06-[a-z0-9-]{1,32}"), "Invalid B06 run ID");
+        require(Runtime.version().feature() == 25, "Java 25 required");
+        Path bin = Path.of(args[1]).toRealPath();
+        Path runs = Path.of(args[2]).toRealPath();
+        require(Files.isDirectory(runs) && runs.getFileName().toString().equals("runs"), "Use the fixture scratch runs directory");
+        Path run = runs.resolve(args[3]);
+        Path owner = run.resolve("b06-run-id");
+        QualifyPostgresql probe = new QualifyPostgresql(bin, run);
+        if (args[0].equals("cleanup")) {
+            require(run.equals(run.toRealPath()) && owner.equals(owner.toRealPath())
+                    && Files.readString(owner).equals(args[3]), "Cleanup requires the original B06 run directory");
+            probe.dualCleanup();
+            return;
+        }
+        requirePortFree(probe.workflow.port);
+        requirePortFree(probe.proof.port);
+        Files.createDirectory(run);
+        Files.writeString(owner, args[3], StandardOpenOption.CREATE_NEW);
+        System.out.printf("B06 run=%s Java=%s UTC start=%s%n", run, Runtime.version(), Instant.now());
+        try {
+            probe.runDualCheck(check);
+        } catch (Exception | Error failure) {
+            try {
+                probe.dualCleanup();
+            } catch (Exception cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+        probe.dualCleanup();
+        System.out.println("PASS B06 workflow/proof verification and teardown " + Instant.now());
+    }
+
+    private void runDualCheck(WorkflowAndProofCheck check) throws Exception {
+        initialize(workflow, workflowWriter, workflowObserver, null);
+        initialize(proof, proofWriter, proofObserver, null);
+        inspect(workflow, workflowWriter, workflowObserver);
+        inspect(proof, proofWriter, proofObserver);
+        denyConnection(workflow, proofWriter.name, proofWriter.password, "28000");
+        denyConnection(proof, workflowWriter.name, workflowWriter.password, "28000");
+        String workflowId = systemId(workflow);
+        String proofId = systemId(proof);
+        require(!workflowId.equals(proofId), "Workflow and proof system identifiers must differ");
+        System.out.printf("PASS independent system identifiers workflow=%s proof=%s%n", workflowId, proofId);
+        check.run(new Connections(() -> connect(workflow, workflowAdmin), () -> connect(workflow, workflowWriter),
+                        () -> connect(workflow, workflowObserver), () -> restart(workflow, workflowId)),
+                new Connections(() -> connect(proof, proofAdmin), () -> connect(proof, proofWriter),
+                        () -> connect(proof, proofObserver), () -> restart(proof, proofId)));
+    }
+
+    private void restart(Cluster cluster, String expectedId) throws Exception {
+        stop(cluster);
+        start(cluster);
+        require(expectedId.equals(systemId(cluster)), "Restart changed the fixture system identifier");
+    }
+
+    private void dualCleanup() throws Exception {
+        cleanup(List.of(proof, workflow));
+    }
+
+    record Connections(SqlConnection migration, SqlConnection runtime, SqlConnection observer, Restart restart) { }
+
+    @FunctionalInterface
+    interface Restart {
+        void run() throws Exception;
+    }
+
+    @FunctionalInterface
+    interface WorkflowAndProofCheck {
+        void run(Connections workflow, Connections proof) throws Exception;
+    }
+
     private void qualify() throws Exception {
         require(Runtime.version().feature() == 25, "Java 25 required");
         System.out.printf("B04 run=%s Java=%s Windows=%s %s%n", run, Runtime.version(),
@@ -508,8 +584,12 @@ public final class QualifyPostgresql {
     }
 
     private void cleanup() throws Exception {
+        cleanup(List.of(restore, proof, workflow));
+    }
+
+    private void cleanup(List<Cluster> clusters) throws Exception {
         List<Exception> failures = new ArrayList<>();
-        for (Cluster cluster : List.of(restore, proof, workflow)) {
+        for (Cluster cluster : clusters) {
             try {
                 Files.deleteIfExists(initPasswordFile(cluster));
                 if (Files.exists(cluster.data.resolve("PG_VERSION"), LinkOption.NOFOLLOW_LINKS)) {

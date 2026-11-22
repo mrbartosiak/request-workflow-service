@@ -111,3 +111,62 @@ The launcher checks `pg_ctl` status and loopback availability in teardown. If a 
 & $java --class-path $classpath $launcher cleanup $bin $runs b05-prior-example prior
 if ($LASTEXITCODE -ne 0) { throw 'B05 workflow cleanup failed' }
 ```
+
+## Run the B06 synthetic authority and guarded release checks
+
+Use the G1-U PostgreSQL 18.7 and pgJDBC 42.7.14 pins and the Java/Maven setup above. Reserve both 55480 and 55481 for the entire check. The launcher provisions separate workflow and proof clusters, unique role credentials and select-only observers. The workflow role receives column-level UPDATE on `policy_guard.policy_version` because PostgreSQL requires UPDATE privilege for row-locking reads. The proof runtime can append reservations and advance the counter. The separate proof owner certifies genesis and the single writer and retains exclusive access to their updates.
+
+Run from the B06 candidate checkout. Use a fresh scratch root with its own copy of the approved cache and a fresh `b06-` run ID.
+
+~~~powershell
+$workspace = (Resolve-Path '<main workspace root>').Path
+$phase = Join-Path $workspace 'tmp/phase5-development'
+$b04 = Join-Path $phase 'b04-fixture'
+$b06 = Join-Path $phase 'b06-fixture'
+$cache = Join-Path $b06 'm2/repository'
+$runs = Join-Path $b06 'runs'
+$bin = Join-Path $b04 'runtime/pgsql/bin'
+$settings = Join-Path $phase 'b01-tools/m2/settings.xml'
+$env:JAVA_HOME = Join-Path $phase 'b01-tools/temurin/jdk-25.0.5.1+2'
+$env:MAVEN_SKIP_RC = 'true'
+$maven = 'C:/Program Files/Apache/apache-maven-3.9.16/bin/mvn.cmd'
+$java = Join-Path $env:JAVA_HOME 'bin/java.exe'
+$javac = Join-Path $env:JAVA_HOME 'bin/javac.exe'
+$build = Join-Path $b06 'launcher'
+$runId = 'b06-example-01'
+
+New-Item -ItemType Directory -Force -Path $build, $runs, (Split-Path -Parent $cache) | Out-Null
+if (!(Test-Path -LiteralPath $cache)) {
+    Copy-Item -LiteralPath (Join-Path $b04 'm2/qualified-repository') -Destination $cache -Recurse
+}
+& $maven -o -B -C -ntp -s $settings -gs $settings "-Dmaven.repo.local=$cache" clean verify
+if ($LASTEXITCODE -ne 0) { throw 'Offline reactor build failed' }
+
+$entries = @('adapter-authority/target/test-classes', 'adapter-authority/target/classes',
+    'adapter-jdbc/target/classes', 'application/target/classes', 'domain/target/classes')
+$jars = @(
+    'org/springframework/spring-jdbc/7.0.11/spring-jdbc-7.0.11.jar',
+    'org/springframework/spring-tx/7.0.11/spring-tx-7.0.11.jar',
+    'org/springframework/spring-beans/7.0.11/spring-beans-7.0.11.jar',
+    'org/springframework/spring-core/7.0.11/spring-core-7.0.11.jar',
+    'commons-logging/commons-logging/1.3.5/commons-logging-1.3.5.jar',
+    'org/jspecify/jspecify/1.0.1/jspecify-1.0.1.jar',
+    'org/postgresql/postgresql/42.7.14/postgresql-42.7.14.jar',
+    'org/checkerframework/checker-qual/3.55.1/checker-qual-3.55.1.jar'
+)
+$entries += $jars | ForEach-Object { Join-Path $cache $_ }
+$classpath = ($entries | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }) -join ';'
+& $javac -encoding UTF-8 -classpath $classpath -d $build 'fixtures/postgresql/QualifyPostgresql.java' 'fixtures/postgresql/B06Postgresql.java'
+if ($LASTEXITCODE -ne 0) { throw 'B06 launcher compile failed' }
+& $java --class-path "$build;$classpath" B06Postgresql run $bin $runs $runId
+if ($LASTEXITCODE -ne 0) { throw 'B06 PostgreSQL checks failed' }
+~~~
+
+The expected backend-loss test may produce a Spring rollback diagnostic after the scratch owner terminates only the in-flight release connection. The launcher also injects an unknown transaction outcome after a guarded enqueue. Both paths keep the buffer unreadable. A subsequent guarded call completes and releases normally. The final lines confirm that both postmasters stopped and ports are free. A restricted process scope may fail to connect to the loopback listener. Use a scope allowed to connect to the two owned fixture endpoints.
+
+For an interrupted run, wait for the launcher to exit and repeat with `cleanup`, the same binary directory, scratch paths and run ID. The launcher checks the run marker, data directory, executable, PID and start time before stopping a postmaster. It keeps the generated credentials and raw server diagnostics inside the private scratch directories.
+
+~~~powershell
+& $java --class-path "$build;$classpath" B06Postgresql cleanup $bin $runs $runId
+if ($LASTEXITCODE -ne 0) { throw 'B06 PostgreSQL cleanup failed' }
+~~~

@@ -109,8 +109,28 @@ public final class JdbcWorkflowRecords implements RequestStore, PolicyGuardStore
 
     @Override
     public Optional<PolicyGuard> find(OrganizationId organization) {
+        return readGuard(organization, "");
+    }
+
+    @Override
+    public Optional<PolicyGuard> lockShared(OrganizationId organization) {
+        return lockGuard(organization, " FOR SHARE");
+    }
+
+    @Override
+    public Optional<PolicyGuard> lockExclusive(OrganizationId organization) {
+        return lockGuard(organization, " FOR UPDATE");
+    }
+
+    private Optional<PolicyGuard> lockGuard(OrganizationId organization, String lockClause) {
         JdbcTransactionRunner.requireBoundConnection(dataSource);
-        return jdbc.query("SELECT policy_version FROM requests.policy_guard WHERE organization = ?",
+        jdbc.execute("SET LOCAL lock_timeout = '200ms'");
+        return readGuard(organization, lockClause);
+    }
+
+    private Optional<PolicyGuard> readGuard(OrganizationId organization, String lockClause) {
+        JdbcTransactionRunner.requireBoundConnection(dataSource);
+        return jdbc.query("SELECT policy_version FROM requests.policy_guard WHERE organization = ?" + lockClause,
                 (row, index) -> new PolicyGuard(organization, row.getLong("policy_version")),
                 organization.value()).stream().findFirst();
     }
